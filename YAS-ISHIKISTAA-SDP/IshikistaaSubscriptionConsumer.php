@@ -1,0 +1,125 @@
+<?php
+
+error_reporting(E_ALL);
+set_time_limit(0);
+ini_set('memory_limit', '-1');
+date_default_timezone_set('Africa/Dar_Es_Salaam');
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+  .php'; */
+require_once __DIR__ . '/vendor/autoload.php';
+
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
+
+require_once 'config.php';
+require_once 'IshikistaaLib.php';
+require_once 'IshikistaaServices.php';
+
+
+try {
+    $connection = new AMQPStreamConnection("localhost", 5672, "trivia_manage", "manage@CNu8Ut");
+    $channel = $connection->channel();
+} catch (Exception $ex) {
+
+    $ex->getMessage();
+    echo $ex;
+}
+
+$callback = function($data) {
+    $msg = json_decode($data->body, TRUE);
+    $msisdn = $msg['msisdn'];
+    $requestType = $msg['requesttype'];
+    $deliveryState = processMessage($msisdn,$requestType);
+    if ($deliveryState) {
+        $data->delivery_info['channel']->basic_ack($data->delivery_info['delivery_tag']); //acknowledge the message
+    } else {
+        $data->delivery_info['channel']->basic_nack($data->delivery_info['delivery_tag']); //acknowledge the message
+    }
+};
+$channel->exchange_declare("triviaExchange", "direct", false, true, false);
+$channel->queue_declare("tigo_ishikistaa_mosubscription_router", false, true, false, false);
+$channel->queue_bind('tigo_ishikistaa_mosubscription_router', 'triviaExchange', 'tigoishikistaa.subscriptions.messages.key');
+$channel->basic_qos(null, QOS_LIMIT, null);
+$channel->basic_consume("tigo_ishikistaa_mosubscription_router", "", false, false, false, false, $callback);
+
+
+while (count($channel->callbacks)) {
+    $channel->wait();
+}
+
+$connection->close();
+$channel->close();
+
+function processMessage($msisdn,$requestType) {
+    $ishikistaaServicesObj = new IshikistaaServices("consumer");
+    $userAccessToken = $ishikistaaServicesObj->userAccessToken();
+    $ishikistaaLib = new IshikistaaLib($msisdn, $userAccessToken, 0,0); //create ishikistaa libe and define amount
+    $subDetails = $ishikistaaServicesObj->fetchLastQuestion($msisdn);
+   
+    if ($requestType === "SUBSCRIPTION") {
+        $subscriberInfo = [];
+        $totalPoints  = $subDetails['TOTAL_POINTS'];
+        $qnsms = str_replace("%s", $totalPoints, POINT_APPEND);
+         $question = $subDetails['QUESTION'];
+         $qnsms .= "Leo ndio leo DROO ya funga mwaka inatoa sehemu ya Tsh 3,000,000 kila lisaa! Shinda donge nono sasa hivi. Kusanya point ushindi unakungoja ".$question;
+	  $qnsms = str_replace("%msisdn", $msisdn, $qnsms);
+         $smsstatus = $ishikistaaLib->sendQuestion($qnsms, 0, 0, "SUB_QUESTION");
+        $subscriberInfo['_STATUS'] = 'QN_SENT';
+        $ishikistaaServicesObj->_update("tbl_qn_subscribers", "MSISDN", $msisdn, $subscriberInfo);
+        if ($smsstatus['isResponse']) {
+            updateSMSStatus($ishikistaaServicesObj, $smsstatus);
+        } else {
+            $ishikistaaServicesObj->closeDB();
+            return TRUE;
+        }
+        $ishikistaaServicesObj->closeDB();
+        return TRUE;
+    }
+}
+
+function updateContentSMS($ishikistaaServicesObj, $smsstatus = []) {
+
+    $smsID = $smsstatus['smsID'];
+    $responseCode = json_decode($smsstatus['response'], TRUE);
+    $responseReceived = $smsstatus['response'];
+    if (isset($responseCode['code']) && $responseCode['code'] == "SUCCESS") {
+        $msgStatus = "SUCCESS";
+    } else {
+        if (isset($responseCode['code'])) {
+            $msgStatus = $responseCode['code'];
+        } else {
+            $msgStatus = 'FAILED';
+        }
+    }
+    $ishikistaaServicesObj->updateSMSStatus($smsID, $msgStatus, $responseReceived);
+    return True;
+}
+
+function updateSMSStatus($ishikistaaServicesObj, $smsstatus = []) {
+    $smsID = $smsstatus['smsID'];
+    $responseCode = json_decode($smsstatus['response'], TRUE);
+    $responseReceived = $smsstatus['response'];
+    if (isset($responseCode['responseParam']['status']) && $responseCode['responseParam']['status'] === 0) {
+        $msgStatus = "SUCCESS";
+        $return = TRUE;
+    } else {
+        if (isset($responseCode['responseParam']['status'])) {
+            $msgStatus = $responseCode['responseParam']['status'];
+        } else {
+            $msgStatus = 'FAILED';
+        }
+        $return = FALSE;
+    }
+    $table = "trivia_sms_logs";
+    $smsArray = [];
+    $smsArray['RESPONSE_TIME'] = date("Y-m-d H:i:s");
+    $smsArray['RESPONSE_RECEIVED'] = $responseReceived;
+    $smsArray['STATUS_CODE'] = $msgStatus;
+    $ishikistaaServicesObj->_update($table, "ID", $smsstatus['smsID'], $smsArray);
+    return $return;
+}
+
+
