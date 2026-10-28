@@ -12,7 +12,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 RAW=$ROOT/reports/raw
-COMPOSE="docker compose -f deploy/compose/compose.yml"
+. scripts/stack.sh
 # Runs share one stack and one reports/raw, so only one may run at a time.
 LOCK=$ROOT/reports/.test-all.lock
 mkdir -p "$ROOT/reports"
@@ -48,31 +48,8 @@ log "unit tests (race detector)"
 go test -race -count=1 -json ./... > "$RAW/unit.json"; record unit $?
 
 log "build binaries and start the stack"
-case "$(docker info --format '{{.Architecture}}')" in aarch64|arm64) GOARCH_STACK=arm64 ;; *) GOARCH_STACK=amd64 ;; esac
-rm -rf deploy/compose/bin deploy/compose/migrations && mkdir -p deploy/compose/bin
-CGO_ENABLED=0 GOOS=linux GOARCH=$GOARCH_STACK go build -tags timetzdata -o deploy/compose/bin/ ./cmd/... &&
-  cp -r migrations deploy/compose/migrations &&
-  $COMPOSE down -v --remove-orphans >/dev/null 2>&1
-start_stack() { $COMPOSE up -d --build --wait mysql rabbitmq rabbitmq-it && $COMPOSE up -d --build app; }
-# A broker occasionally exits during first boot; one clean retry covers it.
-if ! start_stack; then
-  for c in mysql rabbitmq rabbitmq-it; do docker logs yas-test-$c-1 > "$RAW/first-start-$c.log" 2>&1 || true; done
-  $COMPOSE down -v --remove-orphans >/dev/null 2>&1
-  start_stack
-fi
-stack=$?
-ready=1
-if [ $stack -eq 0 ]; then
-  for i in $(seq 1 90); do
-    ready=0
-    for p in $(seq 19091 19101); do
-      [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$p/readyz)" = 204 ] || ready=1
-    done
-    [ $ready -eq 0 ] && break
-    sleep 2
-  done
-fi
-record stack $((stack + ready))
+start_stack "$RAW"
+record stack $?
 docker logs yas-test-app-1 > "$RAW/stack-start.log" 2>&1 || true
 
 DSN_BASE="yas:${YAS_DB_PASSWORD}@tcp(127.0.0.1:13306)"

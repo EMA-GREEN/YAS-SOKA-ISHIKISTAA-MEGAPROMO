@@ -8,4 +8,5 @@ bin/
 *.sql.gz
 *.dump
 deploy/compose/migrations/
+deploy/compose/demo.env
 reports/

@@ -49,6 +49,50 @@ System tests use MSISDNs starting `2557999`; the load generator uses `2557998`.
 
 Add new tests to the catalog so they appear in the report.
 
+## Demo stack with seed data
+
+`scripts/demo.sh` starts a fresh stack, fills it with demo data and leaves it running. It takes about 6 minutes.
+
+```bash
+scripts/demo.sh                                   # start and seed
+scripts/demo-send.sh soka 255799700140 activate   # subscribe a new number, as Tigo would
+scripts/demo-send.sh soka 255799700140 A          # answer as that subscriber
+docker compose -f deploy/compose/compose.yml down -v   # stop and delete everything
+```
+
+**How the data is made:** `cmd/yas-seed` writes only reference data directly: the products, a 12-question bank, and today's Predict-and-Win match day. All subscriber history comes from real callbacks posted through the running services, so every subscription, answer, charge, point and SMS row was written by the Go code itself.
+
+**The cast:** every number is synthetic (`2557997…`), and the last digit picks the fake provider's outcome.
+
+| Number | Product | Story |
+|---|---|---|
+| 255799700010 | Soka | regular player: five answers, some right, some wrong |
+| 255799700020 | Soka | bought 600 points with P600, then answered twice |
+| 255799700031 | Soka | low balance at 99 TZS, charged 45 instead |
+| 255799700042 | Soka | low balance at every tier, never charged |
+| 255799700053 | Soka | provider billing error |
+| 255799700060 | Soka | answered, then sent STOP |
+| 255799700070 | Soka | BOOM customer: free answer, no charge |
+| 255799700084 | Soka | SMS refused by the provider, then resent |
+| 255799700090 | Soka | Predict-and-Win: match 1, predicted 2-1 |
+| 255799700100 | Soka | keyword replies: POINTS, MSAADA, an unknown P-keyword |
+| 255799700110 | Ishikistaa | four answers |
+| 255799700121 | Ishikistaa | low balance, charged on the fallback tier |
+| 255799700130 | Ishikistaa | sent STOP |
+| 255799700140, 255799700150 | Soka, Ishikistaa | never subscribed: for live demos |
+| 25579971xxx0 | Soka | 40 more active players (`DEMO_CROWD`) |
+
+**New numbers:** a never-subscribed number that texts "soka" only gets an invitation, as in PHP. Subscribing happens through Tigo's Activation callback, which `demo-send.sh … activate` imitates; the keyword only reactivates people who left.
+
+**Looking around:**
+- **Credentials:** the stack's random credentials are in `deploy/compose/demo.env`, which git ignores and only you can read.
+- **Provider traffic:** every charge and SMS a number received is at `http://127.0.0.1:18090/requests?msisdn=…`.
+- **Database:** open it with `docker exec -it yas-test-mysql-1 mysql -uyas -p yas_test_system`.
+
+**Interaction with test runs:** `scripts/test-all.sh` replaces a running demo stack with its own and tears it down at the end. Run `scripts/demo.sh` again afterwards.
+
+Never load real customer data into these databases. Copies of production numbers in a test database are exactly what leaks.
+
 ## Running against staging
 
 A local run proves behaviour, not capacity. Before cutover, run the system and load tiers against a staging deployment on production-like hosts:
