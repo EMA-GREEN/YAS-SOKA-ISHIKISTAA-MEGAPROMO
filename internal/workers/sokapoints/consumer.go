@@ -15,7 +15,10 @@ type Consumer struct {
 	Processor Processor
 	AMQPURL   string
 	Log       *slog.Logger
+	Metrics   *messaging.ConsumerMetrics
 }
+
+const consumerName = "soka-point-purchase"
 
 func (c Consumer) Run(ctx context.Context) error {
 	if c.AMQPURL == "" {
@@ -58,6 +61,8 @@ func (c Consumer) consume(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	c.Metrics.SetConnected(consumerName, true)
+	defer c.Metrics.SetConnected(consumerName, false)
 	for {
 		select {
 		case <-ctx.Done():
@@ -69,25 +74,34 @@ func (c Consumer) consume(ctx context.Context) error {
 			callbackID, err := strconv.ParseInt(delivery.MessageId, 10, 64)
 			if err != nil || callbackID <= 0 {
 				c.Log.Warn("point purchase message has invalid callback ID")
+				c.Metrics.Observe(consumerName, messaging.OutcomeInvalidID, time.Time{})
 				if err := delivery.Nack(false, false); err != nil {
 					return err
 				}
 				continue
 			}
+			started := time.Now()
 			processCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err = c.Processor.Process(processCtx, callbackID)
 			cancel()
 			switch {
 			case err == nil, errors.Is(err, ErrNotApplicable):
+				outcome := messaging.OutcomeProcessed
+				if err != nil {
+					outcome = messaging.OutcomeNotApplicable
+				}
+				c.Metrics.Observe(consumerName, outcome, started)
 				if err := delivery.Ack(false); err != nil {
 					return err
 				}
 			case errors.Is(err, ErrInvalid):
+				c.Metrics.Observe(consumerName, messaging.OutcomeReview, started)
 				c.Log.Error("point purchase callback needs review", "callback_id", callbackID, "error", err)
 				if err := delivery.Nack(false, false); err != nil {
 					return err
 				}
 			default:
+				c.Metrics.Observe(consumerName, messaging.OutcomeRetry, started)
 				// Closing the connection requeues the unacknowledged delivery.
 				return err
 			}

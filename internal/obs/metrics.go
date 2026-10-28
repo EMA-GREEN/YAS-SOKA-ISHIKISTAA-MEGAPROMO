@@ -188,3 +188,63 @@ func formatFloat(v float64) string {
 	}
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
+
+type GaugeVec struct {
+	name, help string
+	labels     []string
+	mu         sync.Mutex
+	values     map[string]float64
+}
+
+func (r *Registry) Gauge(name, help string, labels ...string) *GaugeVec {
+	g := &GaugeVec{name: name, help: help, labels: labels, values: map[string]float64{}}
+	r.add(g)
+	return g
+}
+
+func (g *GaugeVec) Set(v float64, values ...string) {
+	key := labelKey(g.labels, values)
+	g.mu.Lock()
+	g.values[key] = v
+	g.mu.Unlock()
+}
+
+func (g *GaugeVec) Value(values ...string) float64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.values[labelKey(g.labels, values)]
+}
+
+func (g *GaugeVec) write(w io.Writer) {
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", g.name, g.help, g.name)
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, key := range sortedKeys(g.values) {
+		fmt.Fprintf(w, "%s%s %s\n", g.name, key, formatFloat(g.values[key]))
+	}
+}
+
+type stateGauge struct {
+	name, help, label string
+	states            []string
+	read              func(context.Context) (map[string]float64, error)
+}
+
+// StateGaugeFunc reports one sample per listed state, zero when absent from the
+// read result. A failed read omits every sample.
+func (r *Registry) StateGaugeFunc(name, help, label string, states []string, read func(context.Context) (map[string]float64, error)) {
+	r.add(&stateGauge{name: name, help: help, label: label, states: states, read: read})
+}
+
+func (g *stateGauge) write(w io.Writer) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	values, err := g.read(ctx)
+	fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n", g.name, g.help, g.name)
+	if err != nil {
+		return
+	}
+	for _, state := range g.states {
+		fmt.Fprintf(w, "%s{%s=%s} %s\n", g.name, g.label, strconv.Quote(state), formatFloat(values[state]))
+	}
+}

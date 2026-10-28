@@ -142,6 +142,19 @@ func (s *supervisor) stopAll() {
 	}
 }
 
+func (s *supervisor) killAll() {
+	s.mu.Lock()
+	procs := make([]*process, 0, len(s.procs))
+	for _, p := range s.procs {
+		procs = append(procs, p)
+	}
+	s.mu.Unlock()
+	for _, p := range procs {
+		p.cmd.Process.Kill()
+		<-p.done
+	}
+}
+
 type lockedWriter struct{ s *supervisor }
 
 func (w *lockedWriter) Write(b []byte) (int, error) {
@@ -212,6 +225,8 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 
 	sup := &supervisor{t: t, procs: map[string]*process{}, kills: map[string]int{}, exited: map[string]int{},
 		env: append(os.Environ(), "MYSQL_DSN="+dsn, "AMQP_URL="+amqpURL)}
+	// A failing test must not leave consumers running against the shared queues.
+	t.Cleanup(sup.killAll)
 	for _, role := range roles {
 		sup.start(role)
 	}

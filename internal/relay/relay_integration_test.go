@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 	"yas-modernization/internal/callbacks"
 	"yas-modernization/internal/messaging"
+	"yas-modernization/internal/obs"
 	"yas-modernization/internal/relay"
 	mysqlstore "yas-modernization/internal/store/mysql"
 	"yas-modernization/internal/workers/sokapoints"
@@ -53,7 +55,7 @@ func TestRelayToPointWorkerIntegration(t *testing.T) {
 	if _, err := store.DB.ExecContext(ctx, `DROP TRIGGER IF EXISTS fail_e2e_message`); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"processed_events", "outbound_messages", "point_ledger", "payment_events", "payment_attempts", "callback_outbox", "callback_events", "products", "subscribers"} {
+	for _, table := range []string{"processed_events", "outbound_message_events", "outbound_messages", "point_ledger", "payment_events", "charge_intents", "payment_attempts", "interactions", "product_subscriptions", "callback_outbox", "callback_events", "products", "subscribers"} {
 		if _, err := store.DB.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatal(table, err)
 		}
@@ -87,7 +89,11 @@ func TestRelayToPointWorkerIntegration(t *testing.T) {
 	relayCtx, stopRelay := context.WithCancel(ctx)
 	defer stopRelay()
 	relayDone := make(chan error, 1)
-	go func() { relayDone <- (relay.Relay{DB: store.DB, AMQPURL: amqpURL, Log: logger}).Run(relayCtx) }()
+	reg := &obs.Registry{}
+	relayMetrics, consumerMetrics := relay.NewMetrics(reg), messaging.NewConsumerMetrics(reg)
+	go func() {
+		relayDone <- (relay.Relay{DB: store.DB, AMQPURL: amqpURL, Log: logger, Metrics: relayMetrics}).Run(relayCtx)
+	}()
 	waitDB(t, ctx, store.DB, `SELECT COUNT(*) FROM callback_outbox WHERE event_id=? AND published_at IS NOT NULL`, callbackID, 1)
 	if _, err := store.DB.ExecContext(ctx, `CREATE TRIGGER fail_e2e_message BEFORE INSERT ON outbound_messages FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='injected worker failure'`); err != nil {
 		t.Fatal(err)
@@ -97,7 +103,7 @@ func TestRelayToPointWorkerIntegration(t *testing.T) {
 	defer stopWorker()
 	workerDone := make(chan error, 1)
 	go func() {
-		workerDone <- (sokapoints.Consumer{Processor: sokapoints.Processor{DB: store.DB}, AMQPURL: amqpURL, Log: logger}).Run(workerCtx)
+		workerDone <- (sokapoints.Consumer{Processor: sokapoints.Processor{DB: store.DB}, AMQPURL: amqpURL, Log: logger, Metrics: consumerMetrics}).Run(workerCtx)
 	}()
 	time.Sleep(2500 * time.Millisecond)
 	var awards int
@@ -138,12 +144,30 @@ func TestRelayToPointWorkerIntegration(t *testing.T) {
 	if err := dead.Ack(false); err != nil {
 		t.Fatal(err)
 	}
+	// The run above exercised each consumer outcome and two relay publishes.
+	const consumer = "soka-point-purchase"
+	if consumerMetrics.Messages.Value(consumer, messaging.OutcomeRetry) < 1 ||
+		consumerMetrics.Messages.Value(consumer, messaging.OutcomeInvalidID) != 1 ||
+		consumerMetrics.Messages.Value(consumer, messaging.OutcomeProcessed) < 2 ||
+		consumerMetrics.Connected.Value(consumer) != 1 ||
+		relayMetrics.Published.Value("soka", "Payment") != 2 || relayMetrics.Connected.Value() != 1 {
+		w := httptest.NewRecorder()
+		reg.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+		t.Fatalf("unexpected metrics:\n%s", w.Body.String())
+	}
+	age, err := (relay.Relay{DB: store.DB}).OldestPendingAge(ctx)
+	if err != nil || age != 0 {
+		t.Fatalf("oldest pending age %v: %v", age, err)
+	}
 	stopWorker()
 	stopRelay()
 	select {
 	case err := <-workerDone:
 		if err != nil {
 			t.Fatal(err)
+		}
+		if consumerMetrics.Connected.Value(consumer) != 0 {
+			t.Fatal("consumer still reported connected after stop")
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not stop")

@@ -12,7 +12,6 @@ import (
 	"yas-modernization/internal/callbacks"
 	"yas-modernization/internal/ingress"
 	"yas-modernization/internal/obs"
-	"yas-modernization/internal/relay"
 	mysqlstore "yas-modernization/internal/store/mysql"
 )
 
@@ -42,20 +41,8 @@ func main() {
 		addr = ":8080"
 	}
 	// Metrics stay off the public listener; the default binds to loopback only.
-	opsAddr := os.Getenv("OPS_ADDR")
-	if opsAddr == "" {
-		opsAddr = "127.0.0.1:9091"
-	}
+	opsAddr := obs.OpsAddr("9091")
 	reg := &obs.Registry{}
-	outbox := relay.Relay{DB: store.DB}
-	reg.GaugeFunc("yas_outbox_backlog", "Outbox rows not yet published.", func(ctx context.Context) (float64, error) {
-		n, err := outbox.Backlog(ctx)
-		return float64(n), err
-	})
-	reg.GaugeFunc("yas_outbox_dead_letters", "Outbox rows that exhausted publish attempts.", func(ctx context.Context) (float64, error) {
-		n, err := outbox.DeadLetters(ctx)
-		return float64(n), err
-	})
 	handler := callbacks.Handler{Store: store, Log: log, Location: location,
 		Guard: ingress.NewGuard(policy, log, reg).Wrap, Metrics: callbacks.NewMetrics(reg)}
 	public := handler.Routes()

@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"yas-modernization/internal/messaging"
 	"yas-modernization/internal/obs"
 	mysqlstore "yas-modernization/internal/store/mysql"
 	"yas-modernization/internal/workers/sokapoints"
@@ -21,10 +22,16 @@ func main() {
 	defer store.DB.Close()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	reg := &obs.Registry{}
 	consumer := sokapoints.Consumer{
 		Processor: sokapoints.Processor{DB: store.DB},
 		AMQPURL:   os.Getenv("AMQP_URL"),
 		Log:       log,
+		Metrics:   messaging.NewConsumerMetrics(reg),
+	}
+	if err := obs.ServeOps(ctx, obs.OpsAddr("9094"), reg, store.Ready, log); err != nil {
+		log.Error("ops listener unavailable", "error", err)
+		os.Exit(1)
 	}
 	if err := consumer.Run(ctx); err != nil {
 		log.Error("worker stopped", "error", err)

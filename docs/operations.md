@@ -19,15 +19,27 @@ With both an allowlist and a token, both must pass. `enforce` and `report` need 
 ## Telemetry
 
 - **Logs:** every process writes JSON through `obs.NewLogger`. It drops values under keys such as `msisdn`, `payload`, `token`, `password` and `dsn`. In all other strings and error messages it masks runs of 9 or more digits (MSISDNs, which also hides long timestamps) and `user:secret@` credentials. Numeric attributes such as event IDs are kept.
-- **Metrics:** the callback server serves Prometheus text format on `OPS_ADDR` (default `127.0.0.1:9091`), never on the public listener, along with `/healthz` and `/readyz`.
+- **Metrics:** every process serves Prometheus text format with `/healthz` and `/readyz` (database ping) on its own loopback port. The ports are callbacks 9091, outbox-relay 9092, soka-mo-worker 9093, soka-point-worker 9094, soka-charge-dispatcher 9095 and soka-sms-dispatcher 9096; `OPS_ADDR` overrides the port. The callback server never serves metrics on its public listener. A process whose ops port is taken refuses to start.
   - `yas_callback_requests_total{product,outcome}` with outcomes `accepted`, `invalid`, `too_large`, `conflict` and `unavailable`
   - `yas_callback_duration_seconds{product}`
   - `yas_ingress_denied_total{reason,mode}` with reasons `source_not_allowed`, `bad_token` and `bad_client_address`
   - `yas_ingress_overloaded_total`
-  - `yas_outbox_backlog` and `yas_outbox_dead_letters`, read at scrape time and omitted if the database cannot be read, so alerts see missing data rather than a false zero
-- Label values come only from fixed sets in code, never from request input.
+  - relay: `yas_relay_published_total{product,kind}`, `yas_relay_publish_failures_total{product,kind}`, `yas_relay_connected`, and the database-read gauges `yas_outbox_backlog`, `yas_outbox_dead_letters` and `yas_outbox_oldest_pending_seconds`
+  - consumers: `yas_consumer_messages_total{consumer,outcome}` with outcomes `processed`, `not_applicable`, `review` (dead-lettered), `invalid_id` and `retry` (left for redelivery); `yas_consumer_process_seconds{consumer}`; `yas_consumer_connected{consumer}`
+  - dispatchers: `yas_charge_intents{state}` and `yas_outbound_messages{state}` for the open and review states only (terminal states grow without bound), and `yas_dispatch_attempts_total{dispatcher,result}` with results `ok`, `uncertain` (claimed, needs manual review) and `failed_before_claim`
+- Gauges read from the database at scrape time are omitted when the read fails, so alerts see missing data rather than a false zero.
+- Label values come only from fixed sets in code, never from request input. The relay's `kind` label is limited to the event types seen in the PHP controllers, and anything else is counted as `other`.
+- Queue depth and consumer counts come from RabbitMQ's own `rabbitmq_prometheus` plugin rather than these processes.
 
-Suggested first alerts: outbox backlog growing for 5 minutes; any outbox dead letter; `unavailable` outcomes above zero; any enforced ingress denial, which is either an attack or a provider network change; missing scrape.
+Suggested first alerts:
+- oldest pending outbox row older than 2 minutes;
+- any outbox dead letter;
+- `unavailable` callback outcomes above zero;
+- any enforced ingress denial, which is either an attack or a provider network change;
+- a consumer or the relay reporting disconnected for more than a minute;
+- consumer `review` or `retry` outcomes rising;
+- any `NEEDS_REVIEW` charge or message, or any `uncertain` dispatch;
+- a missing scrape.
 
 ## Deployment
 
@@ -55,8 +67,13 @@ A smoke run of the built server in the isolated network:
 - wrote no MSISDN to its logs;
 - shut down cleanly on SIGTERM.
 
+For relay and worker metrics:
+- the relay integration test asserts relay publishes, consumer retry, invalid-ID and processed outcomes, and the connected gauge going to 0 on stop;
+- a smoke run of the built relay, MO worker, point worker and charge dispatcher served ready checks and metrics on their own ports;
+- a second relay refused to start on a taken port;
+- no credentials appeared in their logs.
+
 Still open:
-- relay and worker metrics endpoints, including consumer lag and charge/SMS outcomes;
 - the provider-confirmed ingress policy;
 - TLS termination;
 - log shipping and dashboards;

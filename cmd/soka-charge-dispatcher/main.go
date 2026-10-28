@@ -43,10 +43,29 @@ func main() {
 	}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	reg := &obs.Registry{}
+	// Terminal states grow without bound, so only open and review states are counted.
+	reg.StateGaugeFunc("yas_charge_intents", "Open and review-needed rows by state.", "state", []string{"PENDING", "SUBMITTING", "NEEDS_REVIEW"},
+		func(ctx context.Context) (map[string]float64, error) {
+			return obs.CountByState(ctx, store.DB, `SELECT state, COUNT(*) FROM charge_intents WHERE state IN ('PENDING','SUBMITTING','NEEDS_REVIEW') GROUP BY state`)
+		})
+	attempts := reg.Counter("yas_dispatch_attempts_total", "Dispatch loop results: ok, uncertain (claimed, needs review), or failed_before_claim.", "dispatcher", "result")
+	if err := obs.ServeOps(ctx, obs.OpsAddr("9095"), reg, store.Ready, log); err != nil {
+		log.Error("ops listener unavailable", "error", err)
+		os.Exit(1)
+	}
 	for ctx.Err() == nil {
 		workCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		worked, err := dispatcher.DispatchOne(workCtx)
 		cancel()
+		switch {
+		case worked && err == nil:
+			attempts.Inc("charge", "ok")
+		case worked:
+			attempts.Inc("charge", "uncertain")
+		case err != nil:
+			attempts.Inc("charge", "failed_before_claim")
+		}
 		if err != nil {
 			log.Error("charge result needs review", "error", err)
 		}

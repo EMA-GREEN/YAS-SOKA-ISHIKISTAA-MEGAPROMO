@@ -11,12 +11,64 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 	"yas-modernization/internal/messaging"
+	"yas-modernization/internal/obs"
 )
 
 type Relay struct {
 	DB      *sql.DB
 	AMQPURL string
 	Log     *slog.Logger
+	Metrics *Metrics
+}
+
+// Metrics counts relay publishes. A nil value records nothing.
+type Metrics struct {
+	Published *obs.CounterVec // labels: product, kind
+	Failed    *obs.CounterVec // labels: product, kind
+	Connected *obs.GaugeVec
+}
+
+func NewMetrics(reg *obs.Registry) *Metrics {
+	return &Metrics{
+		Published: reg.Counter("yas_relay_published_total", "Outbox events confirmed by the broker and marked published.", "product", "kind"),
+		Failed:    reg.Counter("yas_relay_publish_failures_total", "Outbox publish attempts that failed and were rescheduled.", "product", "kind"),
+		Connected: reg.Gauge("yas_relay_connected", "1 while the relay holds a confirmed broker channel."),
+	}
+}
+
+// Event kinds seen in the PHP callback controllers. The kind comes from the
+// provider payload, so anything else is counted as "other" to bound labels.
+var knownKinds = map[string]bool{"Payment": true, "InteractiveResponse": true, "Activation": true,
+	"DeActivation": true, "RequestSendSms": true, "INTERACTION": true}
+
+func kindLabel(kind string) string {
+	if knownKinds[kind] {
+		return kind
+	}
+	return "other"
+}
+
+func (m *Metrics) published(product, kind string) {
+	if m != nil {
+		m.Published.Inc(product, kindLabel(kind))
+	}
+}
+
+func (m *Metrics) failed(product, kind string) {
+	if m != nil {
+		m.Failed.Inc(product, kindLabel(kind))
+	}
+}
+
+func (m *Metrics) connected(up bool) {
+	if m == nil {
+		return
+	}
+	v := 0.0
+	if up {
+		v = 1
+	}
+	m.Connected.Set(v)
 }
 
 type pending struct {
@@ -73,6 +125,8 @@ func (r Relay) runConnection(ctx context.Context) error {
 	if err := ch.Confirm(false); err != nil {
 		return err
 	}
+	r.Metrics.connected(true)
+	defer r.Metrics.connected(false)
 	confirms := ch.NotifyPublish(make(chan amqp.Confirmation, 1))
 	returns := ch.NotifyReturn(make(chan amqp.Return, 1))
 	for ctx.Err() == nil {
@@ -110,6 +164,7 @@ func (r Relay) runConnection(ctx context.Context) error {
 		cancel()
 		if err != nil {
 			r.Log.Warn("outbox publish failed", "event_id", event.eventID, "error", err)
+			r.Metrics.failed(event.product, event.kind)
 			if updateErr := r.fail(ctx, *event); updateErr != nil {
 				return updateErr
 			}
@@ -124,6 +179,7 @@ func (r Relay) runConnection(ctx context.Context) error {
 		if err != nil || rows != 1 {
 			return errors.New("outbox lease lost after publish")
 		}
+		r.Metrics.published(event.product, event.kind)
 	}
 	return nil
 }
@@ -174,6 +230,14 @@ func (r Relay) Backlog(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM callback_outbox WHERE published_at IS NULL AND dead_lettered_at IS NULL`).Scan(&count)
 	return count, err
+}
+
+// OldestPendingAge is the age in seconds of the oldest unpublished event, or 0.
+func (r Relay) OldestPendingAge(ctx context.Context) (float64, error) {
+	var age sql.NullFloat64
+	err := r.DB.QueryRowContext(ctx, `SELECT TIMESTAMPDIFF(MICROSECOND, MIN(created_at), UTC_TIMESTAMP(6)) / 1e6
+		FROM callback_outbox WHERE published_at IS NULL AND dead_lettered_at IS NULL`).Scan(&age)
+	return age.Float64, err
 }
 
 func (r Relay) DeadLetters(ctx context.Context) (int64, error) {
