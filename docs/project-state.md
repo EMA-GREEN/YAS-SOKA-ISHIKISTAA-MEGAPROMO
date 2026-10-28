@@ -22,6 +22,7 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - PHP-derived callback contract and payment routing characterization in `docs/legacy-callback-contract.md`, with Go tests for all three product routes and ordered payment branches.
 - Soka MO and point-purchase result workers with dedicated durable queues. Exact purchase MOs create pending payments and charge intents; matched successful callbacks create one point award and customer-message intent. Details and limits are in `docs/soka-point-flow.md`.
 - Completion checklist with evidence-based checked steps in `docs/completion-checklist.md`.
+- Guarded Soka charge dispatcher that builds the legacy-shaped HTTP request and moves uncertain results to manual review without automatic resend. It has only contacted a fake local provider; see `docs/charge-dispatch.md`.
 
 ## Validation completed
 
@@ -33,10 +34,11 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - The three PHP callback controllers pass PHP syntax checks. Go tests and vet pass after the PHP-derived contract additions.
 - The Soka point-purchase integration test passed against a disposable MySQL 8.4 database for success, replay, low balance, generic failure, non-purchase skip, unknown tier, missing billing ID, amount mismatch, and injected rollback.
 - The Soka MO integration test passed in disposable MySQL 8.4, including a combined MO-to-payment-to-points check, replay, menu for unknown purchase keywords, unverified billing segment rejection, BOOM offer selection, and injected rollback.
+- The charge dispatcher passed an isolated MySQL plus fake-provider test for request shape, acceptance, uncertain HTTP response, and no automatic resend.
 - Disposable containers were removed. No production database was touched and no remote was pushed.
 
 ## Current boundary and next work
 
-This is a target implementation, not a verified production data migration. Do not switch production traffic. Obtain read-only schema metadata and table statistics, deployed process and queue configuration, and redacted provider callback samples. Then validate the preliminary source-to-target map against live metadata, extend code-derived contracts through the remaining payment workers and MO paths, implement charge submission and outbound SMS delivery and other product workers, observability deployment, data reconciliation, backup/restore rehearsal, and cutover plan before production use.
+This is a target implementation, not a verified production data migration. Do not switch production traffic. Obtain read-only schema metadata and table statistics, deployed process and queue configuration, and redacted provider callback samples. Then validate the preliminary source-to-target map against live metadata, extend code-derived contracts through the remaining payment workers and MO paths, verify real charge-provider reconciliation and implement outbound SMS delivery and other product workers, observability deployment, data reconciliation, backup/restore rehearsal, and cutover plan before production use.
 
 Keep the PHP repository intact as the behavioral reference. Do not commit credentials, dumps, or customer data. The new project is an independent local Git repository on `main`, with no configured remote.

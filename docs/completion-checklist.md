@@ -22,7 +22,8 @@ The PHP repository is the behavioral reference. A checked item means the stated 
 - [x] Characterize callback payment routing and point-purchase rules from PHP. Check: branch tests pass.
 - [x] Process a matched Soka point-purchase result into a payment event, one point award, and a customer-message intent. Check: disposable MySQL success, failure, replay, validation, and rollback tests pass.
 - [x] Process an exact point-purchase MO for an active, verified subscriber into an interaction, pending payment, and charge intent. Check: disposable MySQL test proves replay creates one attempt, unknown keywords never charge, and the resulting callback awards points once.
-- [ ] Send charge requests through a provider adapter and reconcile synchronous response with callbacks. Check: replay and timeout tests prove no duplicate charge.
+- [x] Build a guarded Soka charge dispatcher with stable request IDs and a no-auto-retry rule. Check: fake-provider/MySQL test proves one accepted request and no resend after an uncertain HTTP response.
+- [ ] Verify the real charge-provider contract and reconcile synchronous responses, timeouts, and callbacks. Check: provider fixtures and failure tests prove no duplicate charge or lost outcome.
 - [ ] Deliver outbound SMS and record provider outcomes. Check: retries do not send unintended duplicates and delivery failures are visible.
 - [ ] Migrate Soka gameplay, subscriptions, renewals, web/Android payments, low-balance fallbacks, and jobs. Check: PHP-derived scenario suite and reconciliation pass.
 

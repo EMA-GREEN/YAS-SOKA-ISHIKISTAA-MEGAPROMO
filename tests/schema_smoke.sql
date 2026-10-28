@@ -1,4 +1,4 @@
--- Synthetic records only. Run against a disposable database after migrations 001, 002, and 003.
+-- Synthetic records only. Run against a disposable database after migrations 001, 002, 003, and 004.
 SET time_zone = '+00:00';
 INSERT INTO products (id, code, display_name) VALUES (1, 'soka', 'Soka'), (2, 'ishikistaa', 'Ishikistaa'), (3, 'megapromo', 'MegaPromo');
 INSERT INTO subscribers (id, msisdn) VALUES (1, '255700000001');

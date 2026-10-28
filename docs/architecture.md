@@ -31,7 +31,8 @@ flowchart LR
   NewQueue --> SokaPayment[Soka point payment worker]
   SokaMO --> TargetDB[(New target MySQL database)]
   SokaPayment --> TargetDB
-  TargetDB --> ChargeIntent[Charge intent awaiting provider adapter]
+  TargetDB --> ChargeDispatcher[Guarded Soka charge dispatcher]
+  ChargeDispatcher --> Provider[Provider, only when explicitly enabled]
   TargetDB --> SMSIntent[SMS intent awaiting delivery worker]
 ```
 
@@ -47,4 +48,4 @@ flowchart LR
 | Do not reuse legacy queues yet | Existing workers expect different payloads | Implement and test product-specific translators/workers |
 | Keep dated legacy tables initially | Avoid unverified historic data movement | Inventory all physical tables and retention rules |
 
-The callback API currently supports the three core JSON routes. The isolated Soka point-purchase database path creates a pending charge, then records a matched payment result and point award. Charge submission and SMS delivery are still missing. M-Push, TigoPesa XML/JSON, most MO and payment paths, renewals, questions, prizes, and reporting are not migrated. Do not route production traffic to this service yet.
+The callback API currently supports the three core JSON routes. The isolated Soka point-purchase database path creates a pending charge, then records a matched payment result and point award. Charge submission has an explicitly enabled adapter tested only with a fake provider; SMS delivery is still missing. M-Push, TigoPesa XML/JSON, most MO and payment paths, renewals, questions, prizes, and reporting are not migrated. Do not route production traffic to this service yet.

@@ -7,7 +7,8 @@ flowchart LR
   MO[Customer MO callback] --> Intake[Callback inbox and outbox]
   Intake --> MOQueue[Dedicated Soka MO queue]
   MOQueue --> Pending[Interaction, pending payment and charge intent]
-  Pending --> Await[Charge adapter pending]
+  Pending --> Dispatch[Guarded charge dispatcher]
+  Dispatch --> Provider[Provider request; callback settles outcome]
   A[Payment callback] --> B[Callback inbox and outbox transaction]
   B --> C[RabbitMQ relay]
   C --> D[Dedicated Soka point-purchase queue]
@@ -30,9 +31,9 @@ The worker reads only `soka.Payment` messages on `yas.soka.point-purchases`; oth
 
 ## Remaining before a full customer journey
 
-- Go now creates the `PENDING` attempt and charge intent for exact purchase keywords from active subscribers with a verified billing segment. The charge adapter that sends the request to the provider is still missing.
+- Go now creates the `PENDING` attempt and charge intent for exact purchase keywords from active subscribers with a verified billing segment. A guarded dispatcher now builds and submits the legacy-shaped request, but it has only been tested against a fake provider. Real provider contract and callback reconciliation remain open.
 - Unknown `P...` keywords create the legacy purchase menu as a message intent and never create a charge. `outbound_messages` records an SMS intent; no SMS delivery worker or provider adapter exists yet.
 - The PHP worker increments a mutable subscriber level and updates old answer and daily transaction tables. The target uses an immutable point ledger; answer/level parity and historical data mapping remain open.
 - The PHP code defaults to 100 points for an unknown price. Go refuses unknown prices so a malformed or new tier cannot award an unintended amount. Confirm any new tiers before adding them.
 - The PHP worker can initiate fallback charges on non-purchase low-balance paths. This worker handles only point purchases and never initiates a charge.
-- RabbitMQ end-to-end, provider contract, and production-like load tests remain outstanding. No production cutover has occurred.
+- RabbitMQ end-to-end, real provider contract and timeout reconciliation, and production-like load tests remain outstanding. No production cutover has occurred.
