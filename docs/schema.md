@@ -1,23 +1,56 @@
-# Schema proposal and migration boundary
+# Target database architecture
 
-`migrations/001_callback_inbox_outbox.sql` is an additive proposed schema for callback receipt and delivery. It is not applied to any database. `docs/schema-proposal.sql` is a conceptual domain schema; **do not execute it** until source columns, keys, meanings, data anomalies, and query plans are verified.
+This is a **new target schema**, not a reconstructed ERD of the production databases. The source PHP code uses MySQL, but its live schema, version, data quality, and volumes have not been supplied. The two versioned SQL files were validated in a disposable, network-isolated MySQL 8.4 container. They have not been applied to production or to the PHP databases.
+
+## Subscriber, gameplay, and subscription state
 
 ```mermaid
 erDiagram
   PRODUCTS ||--o{ PRODUCT_SUBSCRIPTIONS : offers
   SUBSCRIBERS ||--o{ PRODUCT_SUBSCRIPTIONS : holds
-  PRODUCTS ||--o{ QUESTIONS : contains
+  PRODUCT_SUBSCRIPTIONS ||--o{ SUBSCRIPTION_EVENTS : records
+  PRODUCT_SUBSCRIPTIONS ||--o{ ACTIVATION_ATTEMPTS : requests
+  PRODUCTS ||--o{ QUESTIONS : owns
+  QUESTIONS ||--o{ QUESTION_SCHEDULES : scheduled_as
+  QUESTION_SCHEDULES ||--o{ OPEN_QUESTION_DELIVERIES : sends
+  PRODUCT_SUBSCRIPTIONS ||--o{ OPEN_QUESTION_DELIVERIES : receives
   PRODUCTS ||--o{ INTERACTIONS : receives
-  SUBSCRIBERS ||--o{ INTERACTIONS : makes
-  INTERACTIONS ||--o{ PAYMENT_ATTEMPTS : may_trigger
+  SUBSCRIBERS ||--o{ INTERACTIONS : initiates
   INTERACTIONS ||--o{ ANSWERS : includes
   QUESTIONS ||--o{ ANSWERS : answered_by
-  PAYMENT_ATTEMPTS ||--o{ ANSWERS : may_fund
-  PAYMENT_ATTEMPTS ||--o{ PROMO_ENTRIES : may_award
-  SUBSCRIBERS ||--o{ OUTBOUND_MESSAGES : receives
-  CALLBACK_EVENTS ||--|| CALLBACK_OUTBOX : enqueues
 ```
 
-This is a **target design**, not the existing ERD. The live database may have different relationships. Proposed monetary values use integer minor units; this depends on provider amount semantics. Business timestamps use UTC in the new schema while callback response timestamps preserve the legacy local format. Legacy source and ID columns preserve traceability. Product and request identifiers remain strings until their actual formats are catalogued.
+## Billing, awards, messages, and reliable event delivery
 
-Before any migration: export `SHOW CREATE TABLE`, indexes, foreign keys, triggers, procedures, views, server version, row counts by dated table, query plans, duplicate rates, null rates, orphan rates, and data growth. Build a source-to-target mapping for every column; compare record counts, identifiers, totals, samples, and checksums. Rehearse backups and restoration, then decide whether dated tables should remain, become partitions, or be archived. Do not infer that a table is unused from code references alone.
+```mermaid
+erDiagram
+  INTERACTIONS ||--o{ PAYMENT_ATTEMPTS : may_trigger
+  PAYMENT_ATTEMPTS ||--o{ PAYMENT_EVENTS : records
+  CALLBACK_EVENTS ||--|| CALLBACK_OUTBOX : enqueues
+  CALLBACK_EVENTS ||--o| PAYMENT_EVENTS : may_settle
+  CALLBACK_EVENTS ||--o{ PROCESSED_EVENTS : deduplicated_by
+  PAYMENT_ATTEMPTS ||--o{ ANSWERS : may_fund
+  ANSWERS ||--o{ POINT_LEDGER : awards
+  PAYMENT_ATTEMPTS ||--o{ POINT_LEDGER : may_award
+  PAYMENT_ATTEMPTS ||--o{ PROMO_ENTRIES : may_award
+  PROMO_ENTRIES ||--o{ PRIZE_AWARDS : may_win
+  SUBSCRIBERS ||--o{ OUTBOUND_MESSAGES : receives
+  OUTBOUND_MESSAGES ||--o{ OUTBOUND_MESSAGE_EVENTS : records
+```
+
+The SQL scripts are definitive for physical columns, keys, and constraints. The diagrams show principal relationships and omit some repeated product and subscriber foreign keys for readability.
+
+## Design rules implemented in SQL
+
+- `migrations/001_callback_inbox_outbox.sql` stores a canonical callback payload and an outbox row in the same Go transaction. A unique product/request/type key prevents a retry from creating another event; a differing payload is rejected for review.
+- `migrations/002_core_domain.sql` models current subscription state separately from append-only subscription events; payment state separately from payment events; and points as a ledger rather than only a mutable balance.
+- Composite foreign keys prevent a payment, answer, point award, prize, or message from silently linking to another product or subscriber. Unique source event keys support idempotent awards and sends.
+- `legacy_source` and `legacy_id` retain source identity. They are nullable for new records and strings until production identifiers are catalogued. No source record is mapped or copied by these scripts.
+- Money uses integer minor units, not floating point. This is conditional on verifying provider amount and currency semantics. New database sessions use UTC; the callback HTTP response retains the legacy Dar es Salaam timestamp format.
+- The new domain schema includes history for subscriptions, payments, and outbound message status. It includes schedules and delivery records for open questions, activation attempts for M-Push, and prize award state. Retention and encryption requirements for payload and message text remain to be defined with operations and privacy owners.
+
+## Remaining schema decisions
+
+Verify production MySQL version and every `SHOW CREATE TABLE`, index, foreign key, view, trigger, and stored procedure. Measure dated-table row counts, growth, duplicates, nulls, orphaned rows, slow queries, and backup/restore performance. Confirm whether provider request IDs can be reused, whether amounts are in minor units, how MSISDNs are normalized, and how historical subscription periods are represented. Then create a column-by-column source map and a data migration plan with checksums and business totals. Do not run target DDL against production or move data until that review is complete.
+
+MySQL DDL commits implicitly; a partially failed migration requires inspection and repair rather than blind rerun. The Go migrator plans offline by default and requires `-apply`, a matching `-expected-db`, and `MIGRATION_DB_DSN` to execute. It records checksums and status in `schema_migrations` and serializes runs with a database lock. Execute versioned scripts in an empty, isolated target database in order, first `001`, then `002`. `tests/schema_smoke.sql` uses synthetic data to check the main relationships. A production backup/recovery runbook and source-data reconciliation tooling are still pending.
