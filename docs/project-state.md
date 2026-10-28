@@ -37,6 +37,7 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - The Soka MO integration test passed in disposable MySQL 8.4, including a combined MO-to-payment-to-points check, replay, menu for unknown purchase keywords, unverified billing segment rejection, BOOM offer selection, and injected rollback.
 - The charge dispatcher passed an isolated MySQL plus fake-provider test for request shape, acceptance, uncertain HTTP response, and no automatic resend.
 - The SMS dispatcher passed an isolated MySQL plus fake-provider test for request shape, one acceptance event, uncertain HTTP response, and no automatic resend. Provider acceptance does not prove handset delivery.
+- An isolated RabbitMQ 4.1 test passed for publisher confirmation, mandatory return, Soka routing, dead-letter handling, redelivery after channel closure, and durable message recovery across broker restart. Full worker plus database crash replay remains open.
 - Disposable containers were removed. No production database was touched and no remote was pushed.
 
 ## Current boundary and next work
