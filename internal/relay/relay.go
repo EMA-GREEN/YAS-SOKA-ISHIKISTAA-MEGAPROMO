@@ -67,6 +67,9 @@ func (r Relay) runConnection(ctx context.Context) error {
 	if err := messaging.DeclareSokaPointPurchases(ch); err != nil {
 		return err
 	}
+	if err := messaging.DeclareSokaMO(ch); err != nil {
+		return err
+	}
 	if err := ch.Confirm(false); err != nil {
 		return err
 	}

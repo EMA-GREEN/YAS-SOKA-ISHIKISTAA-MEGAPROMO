@@ -27,10 +27,12 @@ flowchart LR
   GoAPI --> Outbox[(callback_outbox)]
   Outbox --> Relay[Go relay with broker confirms]
   Relay --> NewQueue[New callback queue]
-  NewQueue --> ProductWorkers[Future product workers]
-  ProductWorkers --> LegacyDB[(Existing MySQL databases)]
-  ProductWorkers --> Provider
-  ProductWorkers --> SMS
+  NewQueue --> SokaMO[Soka MO worker]
+  NewQueue --> SokaPayment[Soka point payment worker]
+  SokaMO --> TargetDB[(New target MySQL database)]
+  SokaPayment --> TargetDB
+  TargetDB --> ChargeIntent[Charge intent awaiting provider adapter]
+  TargetDB --> SMSIntent[SMS intent awaiting delivery worker]
 ```
 
 ## Tradeoffs and acceptance gates
@@ -45,4 +47,4 @@ flowchart LR
 | Do not reuse legacy queues yet | Existing workers expect different payloads | Implement and test product-specific translators/workers |
 | Keep dated legacy tables initially | Avoid unverified historic data movement | Inventory all physical tables and retention rules |
 
-The callback API currently supports only the three JSON billing/MO routes. M-Push, TigoPesa XML/JSON, renewals, SMS delivery, charging, questions, points, prizes, and reporting are not migrated. Do not route production traffic to this service yet.
+The callback API currently supports the three core JSON routes. The isolated Soka point-purchase database path creates a pending charge, then records a matched payment result and point award. Charge submission and SMS delivery are still missing. M-Push, TigoPesa XML/JSON, most MO and payment paths, renewals, questions, prizes, and reporting are not migrated. Do not route production traffic to this service yet.

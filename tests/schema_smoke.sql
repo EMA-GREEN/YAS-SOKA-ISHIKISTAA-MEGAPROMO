@@ -1,4 +1,4 @@
--- Synthetic records only. Run against a disposable database after migrations 001 and 002.
+-- Synthetic records only. Run against a disposable database after migrations 001, 002, and 003.
 SET time_zone = '+00:00';
 INSERT INTO products (id, code, display_name) VALUES (1, 'soka', 'Soka'), (2, 'ishikistaa', 'Ishikistaa'), (3, 'megapromo', 'MegaPromo');
 INSERT INTO subscribers (id, msisdn) VALUES (1, '255700000001');
@@ -33,6 +33,8 @@ INSERT INTO callback_outbox (id, event_id, product, event_kind, payload_json)
 INSERT INTO payment_events (id, payment_attempt_id, callback_event_id, event_kind, occurred_at)
   VALUES (1, 1, 1, 'SUCCESS', '2026-10-28 12:00:00');
 INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('test-consumer', 1);
+INSERT INTO charge_intents (payment_attempt_id, source_callback_event_id, offer_code, state) VALUES (1, 1, '017008600005', 'SUBMITTED');
 SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()) AS table_count,
        (SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema = DATABASE()) AS foreign_key_count,
+       (SELECT COUNT(*) FROM charge_intents) AS charge_intent_count,
        (SELECT COALESCE(SUM(delta_points), 0) FROM point_ledger WHERE product_id = 1 AND subscriber_id = 1) AS point_balance;

@@ -20,21 +20,23 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - Editable Mermaid target ERDs and migration roadmap in `docs/`.
 - Code-based source table-family inventory and preliminary source-to-target mapping in `docs/source-schema-inventory.md`.
 - PHP-derived callback contract and payment routing characterization in `docs/legacy-callback-contract.md`, with Go tests for all three product routes and ordered payment branches.
-- First Soka point-purchase worker, with dedicated durable queue, pending-payment matching, payment and point-ledger updates, customer-message intent, and transactional replay marker. Details and limits are in `docs/soka-point-flow.md`.
+- Soka MO and point-purchase result workers with dedicated durable queues. Exact purchase MOs create pending payments and charge intents; matched successful callbacks create one point award and customer-message intent. Details and limits are in `docs/soka-point-flow.md`.
+- Completion checklist with evidence-based checked steps in `docs/completion-checklist.md`.
 
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.
-- Both SQL migrations and synthetic smoke data applied in a disposable, network-isolated MySQL 8.4 container: 20 application tables, 36 foreign keys, plus the migrator tracking table.
+- The numbered SQL migrations and synthetic smoke data applied in a disposable, network-isolated MySQL 8.4 container: 21 application tables, 38 foreign keys, plus the migrator tracking table.
 - Migrator rerun skipped applied scripts; mismatched target name was rejected.
 - Invalid cross-product links, missing parents, negative payment amounts, and duplicate point awards were rejected.
 - The callback MySQL integration test passed in a separate disposable, network-isolated MySQL 8.4 container: retry deduplication, changed-payload conflict, and rollback after an injected outbox failure.
 - The three PHP callback controllers pass PHP syntax checks. Go tests and vet pass after the PHP-derived contract additions.
 - The Soka point-purchase integration test passed against a disposable MySQL 8.4 database for success, replay, low balance, generic failure, non-purchase skip, unknown tier, missing billing ID, amount mismatch, and injected rollback.
+- The Soka MO integration test passed in disposable MySQL 8.4, including a combined MO-to-payment-to-points check, replay, menu for unknown purchase keywords, unverified billing segment rejection, BOOM offer selection, and injected rollback.
 - Disposable containers were removed. No production database was touched and no remote was pushed.
 
 ## Current boundary and next work
 
-This is a target implementation, not a verified production data migration. Do not switch production traffic. Obtain read-only schema metadata and table statistics, deployed process and queue configuration, and redacted provider callback samples. Then validate the preliminary source-to-target map against live metadata, extend code-derived contracts through the remaining payment workers and MO intake, implement outbound SMS delivery and other product workers, observability deployment, data reconciliation, backup/restore rehearsal, and cutover plan before production use.
+This is a target implementation, not a verified production data migration. Do not switch production traffic. Obtain read-only schema metadata and table statistics, deployed process and queue configuration, and redacted provider callback samples. Then validate the preliminary source-to-target map against live metadata, extend code-derived contracts through the remaining payment workers and MO paths, implement charge submission and outbound SMS delivery and other product workers, observability deployment, data reconciliation, backup/restore rehearsal, and cutover plan before production use.
 
 Keep the PHP repository intact as the behavioral reference. Do not commit credentials, dumps, or customer data. The new project is an independent local Git repository on `main`, with no configured remote.

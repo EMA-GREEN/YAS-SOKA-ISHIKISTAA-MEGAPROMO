@@ -11,10 +11,10 @@ func TestLoadCurrentMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 2 || files[0].Name != "001_callback_inbox_outbox.sql" || files[1].Name != "002_core_domain.sql" {
+	if len(files) != 3 || files[0].Name != "001_callback_inbox_outbox.sql" || files[1].Name != "002_core_domain.sql" || files[2].Name != "003_charge_intents.sql" {
 		t.Fatalf("unexpected migrations: %+v", files)
 	}
-	if len(files[0].Statements) < 2 || len(files[1].Statements) < 15 {
+	if len(files[0].Statements) < 2 || len(files[1].Statements) < 15 || len(files[2].Statements) != 2 {
 		t.Fatal("migration statements missing")
 	}
 }
