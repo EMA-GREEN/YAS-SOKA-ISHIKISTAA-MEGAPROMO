@@ -100,7 +100,8 @@ These are reports and email (`*Report*`, `Revenue*`, `MailerScript`, `*Analysis*
    - the Tigo Payment CP password (`SokaLib.php`);
    - the Tigo API login (`UserAccessToken.php`);
    - the RabbitMQ `trivia_manage` password (in the consumers);
-   - the MySQL `api_user` password, which `UserAccessToken.php` uses to write the token into five product databases. The payment endpoint is plain HTTP on a private address, which the Go dispatcher refuses until a transport decision is made.
+   - the MySQL `api_user` password, which `UserAccessToken.php` uses to write the token into five product databases.
+7. **`MEGAPROMO-APP/TIGO/processTigoPesa.php` takes amount, MSISDN and ticket count from unauthenticated query parameters** and queues a TigoPesa push whose success credits those tickets. As written it fails on an undefined `$db`. Confirm it is not web-reachable and remove it. See `docs/megapromo-behaviour.md`. The payment endpoint is plain HTTP on a private address, which the Go dispatcher refuses until a transport decision is made.
 7. In `SokaMoConsumer.php`, the `INACTIVE` block (lines 585–1037) contains an unreachable older copy of the answer flow. Using a BOOM credit also decrements normal `CREDIT`. Error and timeout paths send a new question without updating `LAST_QN_ID`. See `docs/soka-answer-flow.md`.
 8. A `tigopesa` collection path writes to a `*_test` database, and copies of the Soka M-Push publisher and consumer sit in the Ishikistaa folder.
 
