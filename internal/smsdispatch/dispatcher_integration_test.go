@@ -236,6 +236,33 @@ func TestDispatchIntegration(t *testing.T) {
 		t.Fatalf("login token worked=%v err=%v header=%q", worked, err, authHeader)
 	}
 	mustState(sixth, "ACCEPTED")
+	// Ishikistaa messages use Ishikistaa's InteractiveRequest offer.
+	var offerSeen string
+	offers := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RequestParam struct {
+				Data []struct{ Name, Value string } `json:"data"`
+			} `json:"requestParam"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, f := range body.RequestParam.Data {
+			if f.Name == "OfferCode" {
+				offerSeen = f.Value
+			}
+		}
+		_, _ = w.Write([]byte(`{"responseParam":{"status":"0"}}`))
+	}))
+	defer offers.Close()
+	d.Config.Endpoint = offers.URL
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO products(id,code,display_name) VALUES (2,'ishikistaa','Ishikistaa')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO outbound_messages(product_id,subscriber_id,message_kind,body_text,delivery_state) VALUES (2,1,'UNSUB_SMS','Synthetic Ishikistaa','PENDING')`); err != nil {
+		t.Fatal(err)
+	}
+	if worked, err := d.DispatchOne(ctx); err != nil || !worked || offerSeen != "017008600009" {
+		t.Fatalf("Ishikistaa SMS worked=%v err=%v offer=%s", worked, err, offerSeen)
+	}
 	var resendEvents int64
 	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM outbound_message_events WHERE event_kind='REJECTED_RETRY'`).Scan(&resendEvents); err != nil || resendEvents != 2 {
 		t.Fatalf("resend events=%d err=%v", resendEvents, err)

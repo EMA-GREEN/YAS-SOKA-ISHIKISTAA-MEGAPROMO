@@ -32,7 +32,11 @@ type Dispatcher struct {
 type request struct {
 	id                       int64
 	msisdn, activity, target string
+	product                  string
 }
+
+// serviceIDs are the serviceID values each product's sendRenewal sends.
+var serviceIDs = map[string]string{"soka": "SOKA", "ishikistaa": "ISHIKISTAA"}
 
 func (c Config) validate() error {
 	if len(c.Endpoints) == 0 {
@@ -107,10 +111,10 @@ func (d Dispatcher) claim(ctx context.Context) (*request, error) {
 	}
 	defer tx.Rollback()
 	var item request
-	err = tx.QueryRowContext(ctx, `SELECT r.id, s.msisdn, r.activity_type, r.target
+	err = tx.QueryRowContext(ctx, `SELECT r.id, s.msisdn, r.activity_type, r.target, p.code
 		FROM renewal_requests r JOIN subscribers s ON s.id=r.subscriber_id JOIN products p ON p.id=r.product_id
-		WHERE r.state='PENDING' AND p.code='soka' AND r.target IN (`+placeholders+`)
-		ORDER BY r.id LIMIT 1 FOR UPDATE SKIP LOCKED`, targets...).Scan(&item.id, &item.msisdn, &item.activity, &item.target)
+		WHERE r.state='PENDING' AND p.code IN ('soka','ishikistaa') AND r.target IN (`+placeholders+`)
+		ORDER BY r.id LIMIT 1 FOR UPDATE SKIP LOCKED`, targets...).Scan(&item.id, &item.msisdn, &item.activity, &item.target, &item.product)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -127,7 +131,7 @@ func (d Dispatcher) claim(ctx context.Context) (*request, error) {
 }
 
 func (d Dispatcher) send(ctx context.Context, item request) (int, error) {
-	body, err := json.Marshal(map[string]string{"msisdn": item.msisdn, "serviceID": "SOKA", "activityType": item.activity})
+	body, err := json.Marshal(map[string]string{"msisdn": item.msisdn, "serviceID": serviceIDs[item.product], "activityType": item.activity})
 	if err != nil {
 		return 0, err
 	}

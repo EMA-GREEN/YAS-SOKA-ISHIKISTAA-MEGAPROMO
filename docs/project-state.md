@@ -45,6 +45,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - Tigo API login token client (`internal/tigoauth`), used by the charge, SMS and activation dispatchers before they claim work. Findings: Soka renewal content and Android payments are not live in the PHP code.
 
+- Ishikistaa on the shared trivia engine with a per-product profile: `cmd/ishikistaa-mo-worker` and `cmd/ishikistaa-payment-worker`, their own queues, and per-product offers and service IDs in the shared dispatchers. PHP defects fixed include fallback charges that were never credited.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

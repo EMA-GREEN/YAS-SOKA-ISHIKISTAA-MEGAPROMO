@@ -203,7 +203,7 @@ func (m *mo) submitPrediction(ctx context.Context, sub subscription, s *predictS
 		WHERE product_id=? AND subscriber_id=?`, submissionID, m.now.Add(24*time.Hour).UTC(), m.productID, m.subscriberID); err != nil {
 		return err
 	}
-	attemptID, err := m.charge(ctx, sub, sokagame.PredictRequestID(m.callbackID, m.msisdn), "PREDICTION", sokagame.PredictCharge, offerFor(sub.segment))
+	attemptID, err := m.charge(ctx, sub, sokagame.PredictRequestID(m.callbackID, m.msisdn), "PREDICTION", sokagame.PredictCharge, m.offer(sub.segment))
 	if err != nil {
 		return err
 	}

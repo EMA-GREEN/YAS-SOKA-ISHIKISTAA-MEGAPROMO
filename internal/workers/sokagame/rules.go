@@ -6,7 +6,6 @@ package sokagame
 
 import (
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -19,7 +18,7 @@ const AnswerCharge int64 = 99
 const NormalOffer = "017008600005"
 
 // Golden hours are 18:00 to 23:59 in Dar es Salaam (date("H") 18..23).
-const goldenStart, goldenEnd = 18, 23
+const goldenStart = 18
 
 const (
 	wrongPoints       = 25
@@ -78,42 +77,6 @@ func PurchaseAmount(text string) (int64, bool) {
 	return amount, ok
 }
 
-// Classify follows the order PHP checks an active subscriber's MO in.
-// Anything not recognized is an answer and is charged.
-func Classify(text, reason string) Class {
-	trimmed := strings.TrimSpace(text)
-	upper := strings.ToUpper(trimmed)
-	if upper == "PREDICT" || predictTraffic.MatchString(upper) {
-		return Predict
-	}
-	lowerReason := strings.ToLower(reason)
-	if strings.Contains(lowerReason, strings.ToLower(noOpenQuestion)) || strings.Contains(lowerReason, strings.ToLower(noInteractiveRequest)) {
-		return OpenQuestion
-	}
-	if _, ok := PurchaseAmount(trimmed); ok {
-		return Purchase
-	}
-	if similarPurchase.MatchString(trimmed) {
-		return PurchaseMenu
-	}
-	switch asciiLower(trimmed) {
-	case "ondoa":
-		return OndoaInfo
-	case "pointi", "points", "point":
-		return Points
-	case "help", "mzaada", "zaidi", "mzada", "msaada", "msada":
-		return Help
-	case "ondoa soka", "ondoasoka", "stop":
-		return Unsubscribe
-	}
-	return Answer
-}
-
-func IsGoldenHour(t time.Time) bool {
-	h := t.In(darEsSalaam).Hour()
-	return h >= goldenStart && h <= goldenEnd
-}
-
 // Score decides an answer's result and the points it earns once charged.
 // A correct answer earns the question's points, doubled in golden hours; a
 // wrong one earns 25, or 50 in golden hours. The level bonus applies to both.
@@ -145,17 +108,6 @@ func Fallback(amount int64, billingSystem string) (next int64, prefix string, ok
 		return 30, "FF", true
 	}
 	return 0, "", false
-}
-
-// QuestionMessage is the next-question SMS after a successful answer charge.
-// PHP also inserts rotating marketing text between the two parts; that content
-// is not migrated.
-func QuestionMessage(totalPoints int64, question string) string {
-	return strings.Replace(PointAppend, "%s", strconv.FormatInt(totalPoints, 10), 1) + question + "."
-}
-
-func PointsMessage(totalPoints int64, msisdn string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(PointMsg, "%s", strconv.FormatInt(totalPoints, 10)), "%msisdn", msisdn)
 }
 
 // asciiLower matches PHP 8 strtolower, which changes only ASCII letters.

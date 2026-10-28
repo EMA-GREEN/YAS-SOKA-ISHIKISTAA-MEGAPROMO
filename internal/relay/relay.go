@@ -120,6 +120,12 @@ func (r Relay) runConnection(ctx context.Context) error {
 	if err := messaging.DeclareSokaMO(ch); err != nil {
 		return err
 	}
+	if err := messaging.DeclareIshikistaaMO(ch); err != nil {
+		return err
+	}
+	if err := messaging.DeclareIshikistaaPayments(ch); err != nil {
+		return err
+	}
 	if err := ch.Confirm(false); err != nil {
 		return err
 	}

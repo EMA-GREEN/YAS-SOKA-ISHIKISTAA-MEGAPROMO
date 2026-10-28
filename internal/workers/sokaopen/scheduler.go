@@ -66,7 +66,7 @@ func (s Scheduler) RunOnce(ctx context.Context) (int, error) {
 	for {
 		var scheduleID int64
 		err := s.DB.QueryRowContext(ctx, `SELECT qs.id FROM question_schedules qs JOIN products p ON p.id=qs.product_id
-			WHERE p.code='soka' AND qs.state IN ('PENDING','PROCESSING') AND qs.content IS NOT NULL
+			WHERE p.code IN ('soka','ishikistaa') AND qs.state IN ('PENDING','PROCESSING') AND qs.content IS NOT NULL
 			AND qs.scheduled_for >= ? AND qs.scheduled_for <= ? ORDER BY qs.scheduled_for, qs.id LIMIT 1`, dayStart, now.UTC()).Scan(&scheduleID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return total, nil

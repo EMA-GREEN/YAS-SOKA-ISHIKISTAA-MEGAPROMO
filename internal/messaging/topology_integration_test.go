@@ -92,7 +92,14 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	if err := DeclareParked(ch); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{"yas.soka.point-purchases", "yas.soka.point-purchases.dead", "yas.soka.point-mo", "yas.soka.point-mo.dead", "yas.soka.pending", "yas.megapromo.pending"} {
+	if err := DeclareIshikistaaMO(ch); err != nil {
+		t.Fatal(err)
+	}
+	if err := DeclareIshikistaaPayments(ch); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"yas.soka.point-purchases", "yas.soka.point-purchases.dead", "yas.soka.point-mo", "yas.soka.point-mo.dead", "yas.soka.pending", "yas.megapromo.pending",
+		"yas.ishikistaa.mo", "yas.ishikistaa.payments", "yas.ishikistaa.pending"} {
 		if _, err := ch.QueuePurge(q, false); err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +140,9 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	}
 	// Kinds received before their workers exist are parked, not dropped.
 	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.point-mo",
-		"soka.Activation": "yas.soka.point-mo", "soka.DeActivation": "yas.soka.point-mo", "soka.RequestSendSms": "yas.soka.point-mo"} {
+		"soka.Activation": "yas.soka.point-mo", "soka.DeActivation": "yas.soka.point-mo", "soka.RequestSendSms": "yas.soka.point-mo",
+		"ishikistaa.InteractiveResponse": "yas.ishikistaa.mo", "ishikistaa.DeActivation": "yas.ishikistaa.mo",
+		"ishikistaa.Payment": "yas.ishikistaa.payments", "ishikistaa.MpushSubsInit": "yas.ishikistaa.pending"} {
 		if returned := publishConfirmed(t, conn, "yas.callbacks", key, "106", true); returned {
 			t.Fatalf("%s returned", key)
 		}
@@ -146,8 +155,14 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	if returned := publishConfirmed(t, conn, "yas.callbacks", "soka.Payment", "104", true); returned {
 		t.Fatal("routed replay test returned")
 	}
-	if info, err := ch.QueueInspect("yas.soka.pending"); err != nil || info.Messages != 0 {
-		t.Fatalf("subscription kinds still parked: %d %v", info.Messages, err)
+	for _, q := range []string{"yas.soka.pending", "yas.ishikistaa.pending"} {
+		if info, err := ch.QueueInspect(q); err != nil || info.Messages != 0 {
+			t.Fatalf("%s holds kinds a worker owns: %d %v", q, info.Messages, err)
+		}
+	}
+	// Ishikistaa kinds no worker owns are now unroutable rather than parked.
+	if returned := publishConfirmed(t, conn, "yas.callbacks", "ishikistaa.UnknownKind", "107", true); !returned {
+		t.Fatal("unknown Ishikistaa kind was not returned")
 	}
 	consumer, err := conn.Channel()
 	if err != nil {

@@ -28,10 +28,20 @@ type Processor struct {
 	DB *sql.DB
 	// Now decides dated level bonuses; nil means time.Now.
 	Now func() time.Time
+	// Profile selects the product; nil means Soka.
+	Profile *sokagame.Profile
+}
+
+func (p Processor) profile() *sokagame.Profile {
+	if p.Profile != nil {
+		return p.Profile
+	}
+	return sokagame.Soka
 }
 
 // result is a validated payment callback matched to its pending attempt.
 type result struct {
+	prof                                                   *sokagame.Profile
 	callbackID, attemptID, productID, subscriberID, amount int64
 	requestID, msisdn, status, billingSystem               string
 	fields                                                 map[string]string
@@ -59,13 +69,14 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	if product != "soka" || kind != "Payment" {
+	prof := p.profile()
+	if product != prof.Code || kind != "Payment" {
 		return ErrNotApplicable
 	}
 	// PHP routes PU request IDs to the purchase branch; other Soka payments are
 	// answer charges only when Go created the attempt.
 	// PHP checks Predict-and-Win request IDs before the PU purchase branch.
-	prediction := sokagame.IsPredictRequest(requestID)
+	prediction := prof.Predict && sokagame.IsPredictRequest(requestID)
 	purchase := !prediction && strings.Contains(requestID, "PU")
 	paymentKind := "ANSWER_CHARGE"
 	switch {
@@ -75,18 +86,18 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 		paymentKind = "POINT_PURCHASE"
 	}
 	var processed int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-purchase' AND callback_event_id=?`, callbackID).Scan(&processed)
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name=? AND callback_event_id=?`, prof.PaymentConsumer, callbackID).Scan(&processed)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	r := result{callbackID: callbackID, requestID: requestID, msisdn: msisdn}
+	r := result{prof: prof, callbackID: callbackID, requestID: requestID, msisdn: msisdn}
 	var currency, state, storedKind, subscriberMSISDN string
 	err = tx.QueryRowContext(ctx, `SELECT pa.id, pa.product_id, pa.subscriber_id, pa.amount_minor, pa.currency, pa.state, pa.payment_kind, s.msisdn
 		FROM payment_attempts pa JOIN products p ON p.id=pa.product_id JOIN subscribers s ON s.id=pa.subscriber_id
-		WHERE p.code='soka' AND pa.external_request_id=? FOR UPDATE`, requestID).
+		WHERE p.code=? AND pa.external_request_id=? FOR UPDATE`, prof.Code, requestID).
 		Scan(&r.attemptID, &r.productID, &r.subscriberID, &r.amount, &currency, &state, &storedKind, &subscriberMSISDN)
 	if !purchase && (errors.Is(err, sql.ErrNoRows) || (err == nil && storedKind != paymentKind)) {
 		return ErrNotApplicable
@@ -150,7 +161,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('soka-point-purchase', ?)`, callbackID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES (?, ?)`, prof.PaymentConsumer, callbackID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -167,9 +178,12 @@ func (p Processor) settlePurchase(ctx context.Context, tx *sql.Tx, r result, poi
 			VALUES (?, ?, ?, ?, 'POINT_PURCHASE', ?, UTC_TIMESTAMP(6))`, r.productID, r.subscriberID, r.attemptID, points, sourceKey(r.attemptID)); err != nil {
 			return err
 		}
-		// PHP raises USER_LEVEL on every successful purchase as well as answers.
-		if _, err := tx.ExecContext(ctx, `UPDATE product_subscriptions SET answer_level=answer_level+1 WHERE product_id=? AND subscriber_id=?`, r.productID, r.subscriberID); err != nil {
-			return err
+		// Soka raises USER_LEVEL on every successful purchase as well as answers;
+		// Ishikistaa never raises it.
+		if r.prof.LevelOnPayment {
+			if _, err := tx.ExecContext(ctx, `UPDATE product_subscriptions SET answer_level=answer_level+1 WHERE product_id=? AND subscriber_id=?`, r.productID, r.subscriberID); err != nil {
+				return err
+			}
 		}
 		balance, err := balance(ctx, tx, r)
 		if err != nil {
@@ -216,17 +230,21 @@ func (p Processor) settleAnswer(ctx context.Context, tx *sql.Tx, r result) error
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE product_subscriptions SET answer_level=answer_level+1, current_question_id=COALESCE(?, current_question_id)
-			WHERE product_id=? AND subscriber_id=?`, next, r.productID, r.subscriberID); err != nil {
+		levelUp := 0
+		if r.prof.LevelOnPayment {
+			levelUp = 1
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE product_subscriptions SET answer_level=answer_level+?, current_question_id=COALESCE(?, current_question_id)
+			WHERE product_id=? AND subscriber_id=?`, levelUp, next, r.productID, r.subscriberID); err != nil {
 			return err
 		}
 		total, err := balance(ctx, tx, r)
 		if err != nil {
 			return err
 		}
-		body := strings.Replace(sokagame.PointAppend, "%s", strconv.FormatInt(total, 10), 1)
+		body := strings.Replace(r.prof.PointAppend, "%s", strconv.FormatInt(total, 10), 1)
 		if next != nil {
-			body = sokagame.QuestionMessage(total, question)
+			body = r.prof.QuestionMessage(total, question)
 		}
 		if err := insertMessage(ctx, tx, r, sokagame.KindQuestion, body, "soka-answer-question:"+answerKey); err != nil {
 			return err
@@ -234,6 +252,9 @@ func (p Processor) settleAnswer(ctx context.Context, tx *sql.Tx, r result) error
 		now := time.Now()
 		if p.Now != nil {
 			now = p.Now()
+		}
+		if !r.prof.LevelBonuses {
+			return nil
 		}
 		var reward sql.NullString
 		err = tx.QueryRowContext(ctx, `SELECT reward_message FROM answer_level_bonuses WHERE product_id=? AND bonus_date=? AND level=?`,
@@ -264,15 +285,15 @@ func (p Processor) settleAnswer(ctx context.Context, tx *sql.Tx, r result) error
 				return err
 			}
 			if _, err := tx.ExecContext(ctx, `INSERT INTO charge_intents (payment_attempt_id, source_callback_event_id, offer_code, reference_id) VALUES (?, ?, ?, ?)`,
-				fallbackID, r.callbackID, sokagame.NormalOffer, reference); err != nil {
+				fallbackID, r.callbackID, r.prof.ChargeOffer, reference); err != nil {
 				return err
 			}
 			_, err = tx.ExecContext(ctx, `UPDATE answers SET payment_attempt_id=? WHERE id=?`, fallbackID, answerID)
 			return err
 		}
-		return insertMessage(ctx, tx, r, sokagame.KindLowBalance, sokagame.LowBalance, sourceKey(r.attemptID))
+		return insertMessage(ctx, tx, r, sokagame.KindLowBalance, r.prof.LowBalance, sourceKey(r.attemptID))
 	default:
-		return insertMessage(ctx, tx, r, sokagame.KindError, sokagame.ErrorMsg, sourceKey(r.attemptID))
+		return insertMessage(ctx, tx, r, sokagame.KindError, r.prof.ErrorMsg, sourceKey(r.attemptID))
 	}
 }
 

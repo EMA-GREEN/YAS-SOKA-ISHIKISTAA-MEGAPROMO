@@ -1,6 +1,7 @@
 # Template unit: yas@callbacks, yas@outbox-relay, yas@soka-mo-worker,
 # yas@soka-point-worker, yas@soka-charge-dispatcher, yas@soka-sms-dispatcher,
-# yas@soka-renewal-dispatcher, yas@soka-open-question-scheduler, yas@soka-activation-dispatcher.
+# yas@soka-renewal-dispatcher, yas@soka-open-question-scheduler, yas@soka-activation-dispatcher,
+# yas@ishikistaa-mo-worker, yas@ishikistaa-payment-worker.
 # soka-boom-credit-award is a one-shot round; run it from a timer with -round and -apply.
 # Binaries are built with: CGO_ENABLED=0 go build -o /opt/yas/bin/ ./cmd/...
 [Unit]

@@ -38,7 +38,11 @@ type message struct {
 	attempts                int
 	createdAt               time.Time
 	msisdn, body, requestID string
+	product                 string
 }
+
+// smsOffers are each product's InteractiveRequest offer in PHP.
+var smsOffers = map[string]string{"soka": "017008600010", "ishikistaa": "017008600009"}
 
 type outcome int
 
@@ -145,12 +149,12 @@ func (d Dispatcher) claim(ctx context.Context) (*message, error) {
 	}
 	defer tx.Rollback()
 	var item message
-	err = tx.QueryRowContext(ctx, `SELECT m.id,m.product_id,m.subscriber_id,s.msisdn,m.body_text,m.send_attempts,m.created_at
+	err = tx.QueryRowContext(ctx, `SELECT m.id,m.product_id,m.subscriber_id,s.msisdn,m.body_text,m.send_attempts,m.created_at,p.code
 		FROM outbound_messages m JOIN products p ON p.id=m.product_id JOIN subscribers s ON s.id=m.subscriber_id
-		WHERE p.code='soka' AND (m.message_kind IN ('POINT_PURCHASE_RESULT','POINT_PURCHASE_MENU','QUESTION','REWARD_MSG','POINT_MSG','HELP_MESSAGE','ONDOA_UNSUB_SMS','LOW_BALANCE','ERROR','BOOM_CREDIT_NOTIFY','NON_SUBSCRIBER','INACTIVE_SUB','OPEN_QUESTION') OR m.message_kind LIKE 'PREDICT\\_%')
+		WHERE p.code IN ('soka','ishikistaa') AND (m.message_kind IN ('POINT_PURCHASE_RESULT','POINT_PURCHASE_MENU','QUESTION','REWARD_MSG','POINT_MSG','HELP_MESSAGE','ONDOA_UNSUB_SMS','LOW_BALANCE','ERROR','BOOM_CREDIT_NOTIFY','NON_SUBSCRIBER','INACTIVE_SUB','OPEN_QUESTION','UNSUB_SMS') OR m.message_kind LIKE 'PREDICT\\_%')
 		AND m.delivery_state='PENDING' AND (m.next_attempt_at IS NULL OR m.next_attempt_at <= UTC_TIMESTAMP(6))
 		ORDER BY m.id LIMIT 1 FOR UPDATE SKIP LOCKED`).
-		Scan(&item.id, &item.productID, &item.subscriberID, &item.msisdn, &item.body, &item.attempts, &item.createdAt)
+		Scan(&item.id, &item.productID, &item.subscriberID, &item.msisdn, &item.body, &item.attempts, &item.createdAt, &item.product)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -192,7 +196,7 @@ func (d Dispatcher) send(ctx context.Context, item message, token string) (strin
 	fields := []map[string]string{
 		{"name": "Msisdn", "value": item.msisdn},
 		{"name": "Content", "value": item.body},
-		{"name": "OfferCode", "value": "017008600010"},
+		{"name": "OfferCode", "value": smsOffers[item.product]},
 		{"name": "CpId", "value": d.Config.CPID},
 	}
 	data, err := json.Marshal(map[string]any{

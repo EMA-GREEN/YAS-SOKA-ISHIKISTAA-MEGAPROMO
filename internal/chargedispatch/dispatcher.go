@@ -37,8 +37,14 @@ type Dispatcher struct {
 }
 
 type intent struct {
-	id, paymentID, amount                                       int64
-	offer, requestID, msisdn, reference, currency, paymentState string
+	id, paymentID, amount                                                int64
+	offer, requestID, msisdn, reference, currency, paymentState, product string
+}
+
+// allowedOffers are the charge offers each product's PHP sendCharging uses.
+var allowedOffers = map[string]map[string]bool{
+	"soka":       {"017008600005": true, "017008600272": true},
+	"ishikistaa": {"017008600007": true},
 }
 
 func (c Config) validate() error {
@@ -112,12 +118,12 @@ func (d Dispatcher) claim(ctx context.Context) (*intent, error) {
 	defer tx.Rollback()
 	var item intent
 	err = tx.QueryRowContext(ctx, `SELECT ci.id, ci.payment_attempt_id, pa.amount_minor, ci.offer_code, pa.external_request_id,
-		s.msisdn, COALESCE(ci.reference_id,''), pa.currency, pa.state
+		s.msisdn, COALESCE(ci.reference_id,''), pa.currency, pa.state, p.code
 		FROM charge_intents ci JOIN payment_attempts pa ON pa.id=ci.payment_attempt_id
 		JOIN products p ON p.id=pa.product_id JOIN subscribers s ON s.id=pa.subscriber_id
-		WHERE ci.state='PENDING' AND p.code='soka' AND pa.payment_kind IN ('POINT_PURCHASE','ANSWER_CHARGE','PREDICTION')
+		WHERE ci.state='PENDING' AND p.code IN ('soka','ishikistaa') AND pa.payment_kind IN ('POINT_PURCHASE','ANSWER_CHARGE','PREDICTION')
 		ORDER BY ci.id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&item.id, &item.paymentID, &item.amount,
-		&item.offer, &item.requestID, &item.msisdn, &item.reference, &item.currency, &item.paymentState)
+		&item.offer, &item.requestID, &item.msisdn, &item.reference, &item.currency, &item.paymentState, &item.product)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -125,7 +131,7 @@ func (d Dispatcher) claim(ctx context.Context) (*intent, error) {
 		return nil, err
 	}
 	if item.paymentState != "PENDING" || item.currency != "TZS" || item.amount <= 0 ||
-		(item.offer != "017008600005" && item.offer != "017008600272") {
+		!allowedOffers[item.product][item.offer] {
 		if _, err := tx.ExecContext(ctx, `UPDATE charge_intents SET state='NEEDS_REVIEW', last_error='payment state or amount invalid' WHERE id=?`, item.id); err != nil {
 			return nil, err
 		}

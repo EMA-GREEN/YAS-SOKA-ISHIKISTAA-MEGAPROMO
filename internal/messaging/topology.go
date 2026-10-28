@@ -54,7 +54,7 @@ func DeclareSokaMO(ch *amqp.Channel) error {
 // and the event becomes a visible outbox dead letter instead of vanishing.
 var parked = map[string][]string{
 	"yas.soka.pending":       {},
-	"yas.ishikistaa.pending": {"ishikistaa.#"},
+	"yas.ishikistaa.pending": {"ishikistaa.MpushSubsInit"},
 	"yas.megapromo.pending":  {"megapromo.#"},
 }
 
@@ -62,7 +62,8 @@ var parked = map[string][]string{
 // bindings outlive code, so they are removed explicitly; RabbitMQ accepts
 // unbinding a binding that does not exist.
 var retired = map[string][]string{
-	"yas.soka.pending": {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms", "soka.MpushSubsInit"},
+	"yas.soka.pending":       {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms", "soka.MpushSubsInit"},
+	"yas.ishikistaa.pending": {"ishikistaa.#"},
 }
 
 // DeclareParked declares the holding queues. Workers that take over a kind must
@@ -87,4 +88,41 @@ func DeclareParked(ch *amqp.Channel) error {
 		}
 	}
 	return nil
+}
+
+// declareWorkerQueue declares a durable queue with its own dead-letter queue,
+// bound to the given callback routing keys.
+func declareWorkerQueue(ch *amqp.Channel, queue string, keys ...string) error {
+	dlx := queue + ".dlx"
+	if err := ch.ExchangeDeclare(dlx, "direct", true, false, false, false, nil); err != nil {
+		return err
+	}
+	if _, err := ch.QueueDeclare(queue+".dead", true, false, false, false, nil); err != nil {
+		return err
+	}
+	if err := ch.QueueBind(queue+".dead", "dead", dlx, false, nil); err != nil {
+		return err
+	}
+	arguments := amqp.Table{"x-dead-letter-exchange": dlx, "x-dead-letter-routing-key": "dead"}
+	if _, err := ch.QueueDeclare(queue, true, false, false, false, arguments); err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := ch.QueueBind(queue, key, "yas.callbacks", false, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeclareIshikistaaMO is the Ishikistaa MO worker's queue: customer MOs and
+// the provider's subscription callbacks.
+func DeclareIshikistaaMO(ch *amqp.Channel) error {
+	return declareWorkerQueue(ch, "yas.ishikistaa.mo",
+		"ishikistaa.InteractiveResponse", "ishikistaa.Activation", "ishikistaa.RequestSendSms", "ishikistaa.DeActivation")
+}
+
+// DeclareIshikistaaPayments is the Ishikistaa payment worker's queue.
+func DeclareIshikistaaPayments(ch *amqp.Channel) error {
+	return declareWorkerQueue(ch, "yas.ishikistaa.payments", "ishikistaa.Payment")
 }

@@ -55,9 +55,9 @@ These have a launcher `.sh` but no check loop, and their publishers have no laun
 
 | Process | Kind | Input → output | Effects | Go status |
 |---|---|---|---|---|
-| `IshikistaaMoNotificationPublisher`, `IshikistaaMoConsumer` ×10 | pair | MO gameplay, subscription, points query, M-Push activation callback | charge, SMS, open question | Pending |
-| `IshikistaaPaymentNotificationPublisher`, `IshikistaaPaymentConsumers` ×30 | pair | payment results → answers, point purchase, subscriber | follow-up charge, SMS | Pending |
-| `IshikistaaOpenQuestionScheduler`, `…Publisher`, `…Consumer` ×5 | scheduler and pair | as for Soka | open question SMS | Pending |
+| `IshikistaaMoNotificationPublisher`, `IshikistaaMoConsumer` ×10 | pair | MO gameplay, subscription, points query, M-Push activation callback | charge, SMS, open question | **Done** on the shared engine (`cmd/ishikistaa-mo-worker`, `docs/ishikistaa-differences.md`); M-Push pending |
+| `IshikistaaPaymentNotificationPublisher`, `IshikistaaPaymentConsumers` ×30 | pair | payment results → answers, point purchase, subscriber | follow-up charge, SMS | **Done** (`cmd/ishikistaa-payment-worker`), with the fallback-crediting bug fixed |
+| `IshikistaaOpenQuestionScheduler`, `…Publisher`, `…Consumer` ×5 | scheduler and pair | as for Soka | open question SMS | **Done** by the shared open-question scheduler |
 | `IshikistaaMpushYasSubsInitNotificationPublisher`, `…Consumer` ×5 | pair | M-Push init | M-Push activation | Pending |
 | `IshikistaaSubscriptionConsumer`, `IshikistaaNewRenewalConsumers` | started by script | subscription and renewal queues | SMS, renewal | Pending |
 

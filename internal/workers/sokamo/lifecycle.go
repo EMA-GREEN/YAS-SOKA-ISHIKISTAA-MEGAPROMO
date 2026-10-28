@@ -110,10 +110,26 @@ func (m *mo) balance(ctx context.Context) (int64, error) {
 // renewal records one renewal-system request per endpoint for the guarded
 // renewal dispatcher.
 func (m *mo) renewal(ctx context.Context, activity string) error {
+	return m.renewalTo(ctx, activity, renewalTargets)
+}
+
+// subscriptionRenewal reports a subscription. Staff go only to the
+// product's staff endpoints, which for Soka is none.
+func (m *mo) subscriptionRenewal(ctx context.Context, staff bool) error {
+	if staff {
+		return m.renewalTo(ctx, "SUBSCRIPTION", m.prof.StaffRenewalTargets)
+	}
+	return m.renewal(ctx, "SUBSCRIPTION")
+}
+
+func (m *mo) renewalTo(ctx context.Context, activity string, targets []string) error {
+	if len(targets) == 0 {
+		return nil
+	}
 	if err := m.ensureSubscriber(ctx); err != nil {
 		return err
 	}
-	for _, target := range renewalTargets {
+	for _, target := range targets {
 		if _, err := m.tx.ExecContext(ctx, `INSERT INTO renewal_requests (product_id, subscriber_id, source_callback_event_id, activity_type, target)
 			VALUES (?, ?, ?, ?, ?)`, m.productID, m.subscriberID, m.callbackID, activity, target); err != nil {
 			return err
@@ -142,17 +158,19 @@ func (m *mo) setQuestion(ctx context.Context, sub *subscription) (string, error)
 // subscribe follows the SUBSCRIPTION branch: the provider confirmed an
 // activation. Non-staff subscriptions are also reported to the renewal system.
 func (p Processor) subscribe(ctx context.Context, m *mo, sub *subscription, boom bool) error {
-	staff := sokagame.IsStaff(m.msisdn)
-	if !staff {
-		if err := m.renewal(ctx, "SUBSCRIPTION"); err != nil {
-			return err
-		}
+	staff := m.prof.IsStaff(m.msisdn)
+	if err := m.subscriptionRenewal(ctx, staff); err != nil {
+		return err
 	}
 	text := "SOKA"
+	if m.prof != sokagame.Soka {
+		text = "STAR"
+	}
 	if boom {
-		text = "BOOM_CUSTOMER-SOKA"
+		text = "BOOM_CUSTOMER-" + text
 	}
 	var points int64
+	reactivated := false
 	switch {
 	case sub == nil:
 		var err error
@@ -191,6 +209,7 @@ func (p Processor) subscribe(ctx context.Context, m *mo, sub *subscription, boom
 		if err := m.event(ctx, sub, "REACTIVATED"); err != nil {
 			return err
 		}
+		reactivated = true
 		var err error
 		if points, err = m.balance(ctx); err != nil {
 			return err
@@ -207,7 +226,11 @@ func (p Processor) subscribe(ctx context.Context, m *mo, sub *subscription, boom
 		return err
 	}
 	if question != "" {
-		if err := m.message(ctx, sokagame.KindQuestion, sokagame.WelcomeQuestion(points, question)); err != nil {
+		body := m.prof.WelcomeQuestion(points, question)
+		if reactivated {
+			body = m.prof.ActivationReactivationQuestion(points, question)
+		}
+		if err := m.message(ctx, sokagame.KindQuestion, body); err != nil {
 			return err
 		}
 	}
@@ -219,10 +242,8 @@ func (p Processor) subscribe(ctx context.Context, m *mo, sub *subscription, boom
 
 // reactivate handles SOKA from an inactive subscriber.
 func (p Processor) reactivate(ctx context.Context, m *mo, sub *subscription) error {
-	if !sokagame.IsStaff(m.msisdn) {
-		if err := m.renewal(ctx, "SUBSCRIPTION"); err != nil {
-			return err
-		}
+	if err := m.subscriptionRenewal(ctx, m.prof.IsStaff(m.msisdn)); err != nil {
+		return err
 	}
 	if _, err := m.tx.ExecContext(ctx, `UPDATE product_subscriptions SET state='ACTIVE', ended_at=NULL WHERE id=?`, sub.id); err != nil {
 		return err
@@ -238,7 +259,7 @@ func (p Processor) reactivate(ctx context.Context, m *mo, sub *subscription) err
 	if err != nil {
 		return err
 	}
-	return m.message(ctx, sokagame.KindQuestion, sokagame.ReactivationQuestion(points, question))
+	return m.message(ctx, sokagame.KindQuestion, m.prof.ReactivationQuestion(points, question))
 }
 
 // deactivate follows the UN_SUBSCRIPTION branch for the provider's
@@ -247,11 +268,26 @@ func (m *mo) deactivate(ctx context.Context, sub *subscription) error {
 	if err := m.renewal(ctx, "UNSUBSCRIPTION"); err != nil {
 		return err
 	}
-	if err := m.recordInteraction(ctx, "DEACTIVATION", "ONDOA SOKA"); err != nil {
+	// The gateways record the deactivation as this text.
+	text := "ONDOA SOKA"
+	if m.prof != sokagame.Soka {
+		text = "ONDOA STAR"
+	}
+	if err := m.recordInteraction(ctx, "DEACTIVATION", text); err != nil {
 		return err
 	}
+	if m.prof.UnsubSMS != "" {
+		// Ishikistaa handles UN_SUBSCRIPTION before any subscription check:
+		// it sets the subscriber inactive and always confirms by SMS.
+		if sub != nil && sub.state == "ACTIVE" {
+			if err := m.end(ctx, sub); err != nil {
+				return err
+			}
+		}
+		return m.message(ctx, "UNSUB_SMS", m.prof.UnsubSMS)
+	}
 	if sub == nil || sub.state != "ACTIVE" {
-		return m.message(ctx, sokagame.KindNonCustomer, sokagame.NonCustomer)
+		return m.message(ctx, sokagame.KindNonCustomer, m.prof.NonCustomer)
 	}
 	return m.end(ctx, sub)
 }
@@ -261,7 +297,13 @@ func (m *mo) unsubscribe(ctx context.Context, sub *subscription) error {
 	if err := m.renewal(ctx, "UNSUBSCRIPTION"); err != nil {
 		return err
 	}
-	return m.end(ctx, sub)
+	if err := m.end(ctx, sub); err != nil {
+		return err
+	}
+	if m.prof.UnsubSMS != "" {
+		return m.message(ctx, "UNSUB_SMS", m.prof.UnsubSMS)
+	}
+	return nil
 }
 
 // end makes the subscription inactive and resets the level, sending nothing,
@@ -289,7 +331,7 @@ func (m *mo) openQuestion(ctx context.Context, sub *subscription) error {
 	if err != nil {
 		return err
 	}
-	return m.message(ctx, sokagame.KindOpenQuestion, sokagame.OpenQuestionBody(sokagame.OpenQuestionContent, question, m.msisdn, points))
+	return m.message(ctx, sokagame.KindOpenQuestion, sokagame.OpenQuestionBody(m.prof.OpenQuestionContent, question, m.msisdn, points))
 }
 
 // mpush records the activation request PHP's M-Push consumer sends at once.
@@ -297,7 +339,8 @@ func (m *mo) openQuestion(ctx context.Context, sub *subscription) error {
 // provider's Activation callback later activates.
 func (p Processor) mpush(ctx context.Context, tx *sql.Tx, callbackID int64, msisdn string, payload []byte) error {
 	var processed int
-	err := tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-mo' AND callback_event_id=?`, callbackID).Scan(&processed)
+	prof := p.profile()
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name=? AND callback_event_id=?`, prof.MOConsumer, callbackID).Scan(&processed)
 	if err == nil {
 		return nil
 	}
@@ -311,8 +354,8 @@ func (p Processor) mpush(ctx context.Context, tx *sql.Tx, callbackID int64, msis
 	if err := json.Unmarshal(payload, &request); err != nil || request.Channel == "" {
 		return fmt.Errorf("%w: M-Push payload", ErrNeedsReview)
 	}
-	m := &mo{tx: tx, callbackID: callbackID, msisdn: msisdn}
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code='soka'`).Scan(&m.productID); err != nil {
+	m := &mo{prof: prof, tx: tx, callbackID: callbackID, msisdn: msisdn}
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code=?`, prof.Code).Scan(&m.productID); err != nil {
 		return err
 	}
 	sub, err := m.loadSubscription(ctx)
@@ -320,7 +363,7 @@ func (p Processor) mpush(ctx context.Context, tx *sql.Tx, callbackID int64, msis
 		return err
 	}
 	if sub == nil {
-		if sub, err = m.createSubscription(ctx, "INACTIVE", "NORMAL", false, sokagame.IsStaff(msisdn)); err != nil {
+		if sub, err = m.createSubscription(ctx, "INACTIVE", "NORMAL", false, prof.IsStaff(msisdn)); err != nil {
 			return err
 		}
 	}
@@ -330,7 +373,7 @@ func (p Processor) mpush(ctx context.Context, tx *sql.Tx, callbackID int64, msis
 		"MP"+strconv.FormatInt(callbackID, 10)+msisdn, request.Channel, nullable(request.USSDData)); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('soka-point-mo', ?)`, callbackID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES (?, ?)`, prof.MOConsumer, callbackID); err != nil {
 		return err
 	}
 	return tx.Commit()

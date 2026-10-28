@@ -24,50 +24,9 @@ const (
 	KindInactiveSub = "INACTIVE_SUB"
 )
 
-// staffPrefixes are SokaLib::staffSeries. PHP matches them anywhere in the
-// MSISDN; staff skip the renewal system and get do-not-disturb.
-var staffPrefixes = []string{"255715123", "255713123", "255658123", "255673123", "255678123"}
-
-func IsStaff(msisdn string) bool {
-	for _, prefix := range staffPrefixes {
-		if strings.Contains(msisdn, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
 // IsBoomTag reports the BOOM_CUSTOMER-SOKA activation text PHP builds from the
 // provider's CustomerType.
 func IsBoomTag(customerType string) bool { return customerType == "BOOM_CUSTOMER" }
-
-// IsReactivation is the word an inactive subscriber sends to rejoin.
-func IsReactivation(text string) bool { return asciiLower(strings.TrimSpace(text)) == "soka" }
-
-func firstAppend(points int64) string {
-	return strings.Replace(FirstAppend, "%s", strconv.FormatInt(points, 10), 1)
-}
-
-// WelcomeQuestion is the first question after an activation callback, with the
-// terms link.
-func WelcomeQuestion(points int64, question string) string {
-	return firstAppend(points) + question + TermsSuffix
-}
-
-// ReactivationQuestion follows an inactive subscriber's SOKA. PHP sends the
-// FIRST_APPEND template without substituting %s; Go fills in the points.
-func ReactivationQuestion(points int64, question string) string {
-	return firstAppend(points) + question + "."
-}
-
-// CreditQuestion is sent after a free-credit answer. PHP adds no full stop.
-func CreditQuestion(total, remaining int64, question string) string {
-	body := strings.Replace(PointAppend, "%s", strconv.FormatInt(total, 10), 1)
-	if remaining >= 1 {
-		body += "KETE " + strconv.FormatInt(remaining, 10) + " Buree!"
-	}
-	return body + question
-}
 
 // OpenQuestionContent is OPEN_QN_CONTENT, sent when the provider reports that
 // no interactive session is open for the subscriber's reply.

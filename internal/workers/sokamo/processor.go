@@ -22,6 +22,15 @@ type Processor struct {
 	DB *sql.DB
 	// Now decides golden hours and dated level bonuses; nil means time.Now.
 	Now func() time.Time
+	// Profile selects the product; nil means Soka.
+	Profile *sokagame.Profile
+}
+
+func (p Processor) profile() *sokagame.Profile {
+	if p.Profile != nil {
+		return p.Profile
+	}
+	return sokagame.Soka
 }
 
 type subscription struct {
@@ -34,6 +43,7 @@ type subscription struct {
 
 // mo is one callback being processed inside its transaction.
 type mo struct {
+	prof                *sokagame.Profile
 	tx                  *sql.Tx
 	callbackID          int64
 	msisdn, requestID   string
@@ -73,7 +83,8 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	if product != "soka" {
+	prof := p.profile()
+	if product != prof.Code {
 		return ErrNotApplicable
 	}
 	switch kind {
@@ -87,7 +98,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid payload", ErrNeedsReview)
 	}
-	if fields["OfferCode"] == sokagame.TestOfferCode {
+	if prof.TestOfferCode != "" && fields["OfferCode"] == prof.TestOfferCode {
 		return ErrNotApplicable
 	}
 	// PHP records an activation as a subscription only when SubscriptionStatus
@@ -98,10 +109,10 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	}
 	class := sokagame.Answer
 	if kind == "InteractiveResponse" {
-		class = sokagame.Classify(fields["CustomerResponse"], fields["Reason"])
+		class = prof.Classify(fields["CustomerResponse"], fields["Reason"])
 	}
 	var processed int
-	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-mo' AND callback_event_id=?`, callbackID).Scan(&processed)
+	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name=? AND callback_event_id=?`, prof.MOConsumer, callbackID).Scan(&processed)
 	if err == nil {
 		return nil
 	}
@@ -112,8 +123,8 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil || event.RequestID != requestID || event.MSISDN != msisdn {
 		return fmt.Errorf("%w: callback identity", ErrNeedsReview)
 	}
-	m := &mo{tx: tx, callbackID: callbackID, msisdn: msisdn, requestID: requestID, fields: fields, now: now}
-	if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code='soka'`).Scan(&m.productID); err != nil {
+	m := &mo{prof: prof, tx: tx, callbackID: callbackID, msisdn: msisdn, requestID: requestID, fields: fields, now: now}
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code=?`, prof.Code).Scan(&m.productID); err != nil {
 		return err
 	}
 	sub, err := m.loadSubscription(ctx)
@@ -131,7 +142,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 		}
 		err = m.openQuestion(ctx, sub)
 	case kind == "Activation" || kind == "RequestSendSms":
-		err = p.subscribe(ctx, m, sub, sokagame.IsBoomTag(fields["CustomerType"]))
+		err = p.subscribe(ctx, m, sub, prof.Boom && sokagame.IsBoomTag(fields["CustomerType"]))
 	case kind == "DeActivation":
 		err = m.deactivate(ctx, sub)
 	default:
@@ -140,7 +151,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('soka-point-mo', ?)`, callbackID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES (?, ?)`, prof.MOConsumer, callbackID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -160,30 +171,30 @@ func (p Processor) interactive(ctx context.Context, m *mo, sub *subscription, cl
 		if err := m.recordInteraction(ctx, "MO", text); err != nil {
 			return err
 		}
-		return m.message(ctx, sokagame.KindInactiveSub, sokagame.InactiveSub)
+		return m.message(ctx, m.prof.InactiveReplyKind, m.prof.InactiveReply)
 	}
 	if err := m.recordInteraction(ctx, "MO", text); err != nil {
 		return err
 	}
 	switch class {
 	case sokagame.Help:
-		return m.message(ctx, sokagame.KindHelp, sokagame.HelpMsg)
+		return m.message(ctx, sokagame.KindHelp, m.prof.HelpMsg)
 	case sokagame.OndoaInfo:
-		return m.message(ctx, sokagame.KindOndoa, sokagame.OndoaMsg)
+		return m.message(ctx, sokagame.KindOndoa, m.prof.OndoaMsg)
 	case sokagame.Points:
 		balance, err := m.balance(ctx)
 		if err != nil {
 			return err
 		}
-		return m.message(ctx, sokagame.KindPoints, sokagame.PointsMessage(balance, m.msisdn))
+		return m.message(ctx, sokagame.KindPoints, m.prof.PointsMessage(balance, m.msisdn))
 	case sokagame.Unsubscribe:
 		return m.unsubscribe(ctx, sub)
 	}
 	if sub.state != "ACTIVE" {
-		if sokagame.IsReactivation(text) {
+		if m.prof.IsReactivation(text) {
 			return p.reactivate(ctx, m, sub)
 		}
-		return m.message(ctx, sokagame.KindInactiveSub, sokagame.InactiveSub)
+		return m.message(ctx, m.prof.InactiveReplyKind, m.prof.InactiveReply)
 	}
 	switch class {
 	case sokagame.PurchaseMenu:
@@ -193,7 +204,7 @@ func (p Processor) interactive(ctx context.Context, m *mo, sub *subscription, cl
 			return fmt.Errorf("%w: billing segment unverified", ErrNeedsReview)
 		}
 		amount, _ := sokagame.PurchaseAmount(text)
-		_, err := m.charge(ctx, *sub, "PU"+strconv.FormatInt(m.callbackID, 10)+m.msisdn, "POINT_PURCHASE", amount, offerFor(sub.segment))
+		_, err := m.charge(ctx, *sub, "PU"+strconv.FormatInt(m.callbackID, 10)+m.msisdn, "POINT_PURCHASE", amount, m.offer(sub.segment))
 		return err
 	}
 	if sub.boomCredits > 0 || sub.freeCredits > 0 {
@@ -217,14 +228,14 @@ func (p Processor) score(ctx context.Context, m *mo, sub subscription, text stri
 		return "", 0, err
 	}
 	var bonus int64
-	if withBonus {
+	if withBonus && m.prof.LevelBonuses {
 		err := m.tx.QueryRowContext(ctx, `SELECT bonus_points FROM answer_level_bonuses WHERE product_id=? AND bonus_date=? AND level=?`,
 			sub.productID, sokagame.DarDate(m.now), sub.level+1).Scan(&bonus)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return "", 0, err
 		}
 	}
-	result, points := sokagame.Score(text, answerKey.String, questionPoints, sokagame.IsGoldenHour(m.now), bonus)
+	result, points := sokagame.Score(text, answerKey.String, questionPoints, m.prof.IsGoldenHour(m.now), bonus)
 	return result, points, nil
 }
 
@@ -249,7 +260,7 @@ func (p Processor) answer(ctx context.Context, m *mo, sub subscription, text str
 	if err != nil {
 		return err
 	}
-	attemptID, err := m.charge(ctx, sub, strconv.FormatInt(m.callbackID, 10)+m.msisdn, "ANSWER_CHARGE", sokagame.AnswerCharge, offerFor(sub.segment))
+	attemptID, err := m.charge(ctx, sub, strconv.FormatInt(m.callbackID, 10)+m.msisdn, "ANSWER_CHARGE", sokagame.AnswerCharge, m.offer(sub.segment))
 	if err != nil {
 		return err
 	}
@@ -294,7 +305,7 @@ func (p Processor) freeAnswer(ctx context.Context, m *mo, sub subscription, text
 	if err != nil {
 		return err
 	}
-	return m.message(ctx, sokagame.KindQuestion, sokagame.CreditQuestion(total, remaining, question))
+	return m.message(ctx, sokagame.KindQuestion, m.prof.CreditQuestion(total, remaining, question))
 }
 
 // charge records a pending payment attempt and the intent the guarded
@@ -316,11 +327,12 @@ func (m *mo) charge(ctx context.Context, sub subscription, requestID, kind strin
 	return attemptID, err
 }
 
-func offerFor(segment string) string {
-	if segment == "BOOM" {
-		return "017008600272"
+// offer is the charge offer for the subscriber's billing segment.
+func (m *mo) offer(segment string) string {
+	if m.prof.Boom && segment == "BOOM" {
+		return m.prof.BoomOffer
 	}
-	return sokagame.NormalOffer
+	return m.prof.ChargeOffer
 }
 
 func namedValues(payload []byte) (map[string]string, error) {
