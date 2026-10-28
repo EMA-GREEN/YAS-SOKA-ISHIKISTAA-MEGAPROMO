@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"yas-modernization/internal/obs"
 )
 
 var ErrConflict = errors.New("request ID reused with different payload")
@@ -21,6 +23,31 @@ type Handler struct {
 	Store    Store
 	Log      *slog.Logger
 	Location *time.Location
+	// Guard, when set, wraps every callback route but not the health routes.
+	Guard   func(http.Handler) http.Handler
+	Metrics *Metrics
+}
+
+// Metrics counts callback outcomes by product. Outcomes are a fixed set.
+type Metrics struct {
+	Requests *obs.CounterVec
+	Duration *obs.HistogramVec
+}
+
+func NewMetrics(reg *obs.Registry) *Metrics {
+	return &Metrics{
+		Requests: reg.Counter("yas_callback_requests_total", "Callback requests by product and outcome.", "product", "outcome"),
+		Duration: reg.Histogram("yas_callback_duration_seconds", "Callback handling time by product.",
+			[]float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5}, "product"),
+	}
+}
+
+func (m *Metrics) observe(product, outcome string, started time.Time) {
+	if m == nil {
+		return
+	}
+	m.Requests.Inc(product, outcome)
+	m.Duration.Observe(time.Since(started).Seconds(), product)
 }
 
 func (h Handler) Routes() http.Handler {
@@ -32,7 +59,11 @@ func (h Handler) Routes() http.Handler {
 		"/notification/megapromo":           "megapromo",
 	} {
 		p := product
-		mux.HandleFunc("POST "+path, func(w http.ResponseWriter, r *http.Request) { h.receive(w, r, p) })
+		var route http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.receive(w, r, p) })
+		if h.Guard != nil {
+			route = h.Guard(route)
+		}
+		mux.Handle("POST "+path, route)
 	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -48,15 +79,18 @@ func (h Handler) Routes() http.Handler {
 }
 
 func (h Handler) receive(w http.ResponseWriter, r *http.Request, product string) {
+	started := time.Now()
 	defer r.Body.Close()
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		h.Metrics.observe(product, "too_large", started)
 		http.Error(w, "invalid request size", http.StatusRequestEntityTooLarge)
 		return
 	}
 	event, err := ParseJSON(product, body)
 	if err != nil {
+		h.Metrics.observe(product, "invalid", started)
 		http.Error(w, "invalid callback", http.StatusBadRequest)
 		return
 	}
@@ -64,11 +98,14 @@ func (h Handler) receive(w http.ResponseWriter, r *http.Request, product string)
 	defer cancel()
 	id, err := h.Store.Save(ctx, event)
 	if errors.Is(err, ErrConflict) {
+		h.Log.Warn("callback request ID reused with different payload", "product", product, "request_id", event.RequestID)
+		h.Metrics.observe(product, "conflict", started)
 		http.Error(w, "conflicting callback", http.StatusConflict)
 		return
 	}
 	if err != nil {
 		h.Log.Error("callback persistence failed", "product", product, "error", err)
+		h.Metrics.observe(product, "unavailable", started)
 		http.Error(w, "temporarily unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -89,4 +126,5 @@ func (h Handler) receive(w http.ResponseWriter, r *http.Request, product string)
 	response.ResponseParam.Description = "Success"
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(response)
+	h.Metrics.observe(product, "accepted", started)
 }

@@ -1,0 +1,36 @@
+# Template unit: yas@callbacks, yas@outbox-relay, yas@soka-mo-worker,
+# yas@soka-point-worker, yas@soka-charge-dispatcher, yas@soka-sms-dispatcher.
+# Binaries are built with: CGO_ENABLED=0 go build -o /opt/yas/bin/ ./cmd/...
+[Unit]
+Description=YAS %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yas
+Group=yas
+EnvironmentFile=/etc/yas/yas.env
+ExecStart=/opt/yas/bin/%i
+# SIGTERM lets the server drain and consumers stop without acknowledging work.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -25,6 +25,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - Guarded Soka charge dispatcher that builds the legacy-shaped HTTP request and moves uncertain results to manual review without automatic resend. It has only contacted a fake local provider; see `docs/charge-dispatch.md`.
 - Guarded Soka purchase SMS dispatcher that creates the legacy-shaped InteractiveRequest, records provider acceptance or review state, and never resends uncertain requests automatically. It has only contacted a fake local provider; see `docs/sms-dispatch.md`.
 
+- Fail-closed callback ingress policy (source allowlist with trusted-proxy handling, optional shared token, report mode, in-flight limit), redacting JSON logger for every process, Prometheus metrics and health on a loopback ops listener, and an env example plus hardened systemd template. See `docs/operations.md`.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.
@@ -40,6 +42,7 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - An isolated RabbitMQ 4.1 test passed for publisher confirmation, mandatory return, Soka routing, dead-letter handling, redelivery after channel closure, and durable message recovery across broker restart. Full worker plus database crash replay remains open.
 - An end-to-end relay-to-point-worker test passed against isolated MySQL 8.4 and RabbitMQ 4.1: a callback saved to the outbox was relayed and consumed; an injected worker transaction failure left no award and the message was redelivered until it succeeded once; reopening the outbox as if the relay crashed after broker confirmation republished the event without a second financial effect; a malformed message reached the visible dead-letter queue. 
 - A crash-recovery test (`internal/e2e`) runs the relay, Soka MO worker, and Soka point worker as separate processes against isolated MySQL 8.4 and RabbitMQ 4.1. While 40 customers send purchase MOs and a simulated provider answers each charge (sometimes twice), it SIGKILLs and restarts a random process every 150–650 ms for 25 seconds and occasionally reopens published outbox rows. Four runs, each with 40–48 kills and 9–17 forced replays, converged to exactly one interaction, payment attempt, charge intent, payment event, point award with the correct amount, and customer message per purchase, with empty work and dead-letter queues and a clean SIGTERM shutdown. A deliberately broken worker that acknowledged before committing failed the test with a lost award. Broker or MySQL restarts during the run, the charge and SMS dispatchers, and non-purchase paths remain outside this test.
+- Ingress, redaction, and metrics unit tests pass under `-race`. A smoke run of the built callback server in the isolated network refused to start without a policy, rejected a missing token with 403, accepted a tokened callback with the legacy response, exposed metrics only on loopback, wrote no MSISDN to logs, and shut down cleanly.
 - Disposable containers were removed. No production database was touched and no remote was pushed.
 
 ## Current boundary and next work

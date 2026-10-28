@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"yas-modernization/internal/obs"
 	mysqlstore "yas-modernization/internal/store/mysql"
 	"yas-modernization/internal/workers/sokamo"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := obs.NewLogger(os.Stdout)
 	store, err := mysqlstore.Open(os.Getenv("MYSQL_DSN"))
 	if err != nil {
 		log.Error("database unavailable", "error", err)

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"yas-modernization/internal/obs"
 )
 
 const sample = `{"requestId":"S123","requestTimeStamp":"20261028120000","requestParam":{"data":[{"name":"Msisdn","value":"255700000001"},{"name":"Type","value":"Payment"},{"name":"ChargeAmount","value":"300"}]}}`
@@ -70,5 +72,54 @@ func TestHandlerAcknowledgesOnlySavedCallback(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/soka-trivia/notification", strings.NewReader(sample)))
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected retryable response, got %d", w.Code)
+	}
+}
+
+func TestGuardCoversCallbacksButNotHealth(t *testing.T) {
+	store := &fakeStore{id: 7}
+	location, _ := time.LoadLocation("Africa/Dar_es_Salaam")
+	deny := func(http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
+	}
+	h := Handler{Store: store, Log: slog.Default(), Location: location, Guard: deny}.Routes()
+	for _, path := range []string{"/notification/soka-trivia/billing", "/soka-trivia/notification", "/ishikistaa/notification", "/notification/megapromo"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(sample)))
+		if w.Code != http.StatusForbidden {
+			t.Errorf("%s bypassed the guard: %d", path, w.Code)
+		}
+	}
+	if store.saved != 0 {
+		t.Fatal("guarded request reached the store")
+	}
+	for _, path := range []string{"/healthz", "/readyz"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusNoContent {
+			t.Errorf("%s status %d", path, w.Code)
+		}
+	}
+}
+
+func TestMetricsCountOutcomes(t *testing.T) {
+	store := &fakeStore{id: 9}
+	location, _ := time.LoadLocation("Africa/Dar_es_Salaam")
+	reg := &obs.Registry{}
+	metrics := NewMetrics(reg)
+	h := Handler{Store: store, Log: slog.Default(), Location: location, Metrics: metrics}.Routes()
+	send := func(body string) {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/ishikistaa/notification", strings.NewReader(body)))
+	}
+	send(sample)
+	send(`{}`)
+	send(strings.Repeat("x", 1<<20+1))
+	store.err = ErrConflict
+	send(sample)
+	store.err = errors.New("down")
+	send(sample)
+	for outcome, want := range map[string]float64{"accepted": 1, "invalid": 1, "too_large": 1, "conflict": 1, "unavailable": 1} {
+		if got := metrics.Requests.Value("ishikistaa", outcome); got != want {
+			t.Errorf("%s = %v, want %v", outcome, got, want)
+		}
 	}
 }

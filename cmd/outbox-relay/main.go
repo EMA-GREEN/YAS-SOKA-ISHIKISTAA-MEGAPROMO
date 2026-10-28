@@ -2,17 +2,17 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"yas-modernization/internal/obs"
 	"yas-modernization/internal/relay"
 	mysqlstore "yas-modernization/internal/store/mysql"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := obs.NewLogger(os.Stdout)
 	store, err := mysqlstore.Open(os.Getenv("MYSQL_DSN"))
 	if err != nil {
 		log.Error("startup failed", "error", err)

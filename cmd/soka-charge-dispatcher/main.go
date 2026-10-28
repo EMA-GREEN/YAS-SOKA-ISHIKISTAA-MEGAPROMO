@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,11 +9,12 @@ import (
 
 	driver "github.com/go-sql-driver/mysql"
 	"yas-modernization/internal/chargedispatch"
+	"yas-modernization/internal/obs"
 	mysqlstore "yas-modernization/internal/store/mysql"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := obs.NewLogger(os.Stdout)
 	if os.Getenv("CHARGE_DISPATCH_ENABLED") != "true" {
 		log.Error("charge dispatch requires CHARGE_DISPATCH_ENABLED=true")
 		os.Exit(1)

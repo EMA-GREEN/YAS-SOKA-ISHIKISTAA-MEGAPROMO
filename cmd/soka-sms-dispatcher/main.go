@@ -2,19 +2,19 @@ package main
 
 import (
 	"context"
-	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	driver "github.com/go-sql-driver/mysql"
+	"yas-modernization/internal/obs"
 	"yas-modernization/internal/smsdispatch"
 	mysqlstore "yas-modernization/internal/store/mysql"
 )
 
 func main() {
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	log := obs.NewLogger(os.Stdout)
 	if os.Getenv("SMS_DISPATCH_ENABLED") != "true" {
 		log.Error("SMS dispatch requires SMS_DISPATCH_ENABLED=true")
 		os.Exit(1)
