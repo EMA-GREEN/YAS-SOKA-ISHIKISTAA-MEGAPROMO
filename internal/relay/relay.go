@@ -36,10 +36,11 @@ func NewMetrics(reg *obs.Registry) *Metrics {
 	}
 }
 
-// Event kinds seen in the PHP callback controllers. The kind comes from the
+// Event kinds seen in the PHP callback controllers, plus the M-Push and
+// TigoPesa push kinds the Go intake assigns. The kind comes from the
 // provider payload, so anything else is counted as "other" to bound labels.
 var knownKinds = map[string]bool{"Payment": true, "InteractiveResponse": true, "Activation": true,
-	"DeActivation": true, "RequestSendSms": true, "INTERACTION": true}
+	"DeActivation": true, "RequestSendSms": true, "INTERACTION": true, "MpushSubsInit": true, "TigoPesaPushResult": true}
 
 func kindLabel(kind string) string {
 	if knownKinds[kind] {

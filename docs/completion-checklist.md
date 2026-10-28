@@ -6,7 +6,7 @@ The PHP repository is the behavioral reference. A checked item means the stated 
 
 - [x] Inventory the three PHP callback routes and source DDL families. Evidence: `docs/legacy-callback-contract.md`, `docs/source-schema-inventory.md`.
 - [x] Define the target entities and visual ERD. Evidence: `docs/schema.md`, `migrations/001_callback_inbox_outbox.sql`, `migrations/002_core_domain.sql`.
-- [ ] Trace every active PHP entry point, worker, queue, scheduled job, and external effect. Check: code-derived contract matrix with tests for each chosen behavior.
+- [ ] Trace every active PHP entry point, worker, queue, scheduled job, and external effect. Check: code-derived contract matrix with tests for each chosen behavior. Partial evidence: `docs/legacy-process-matrix.md` covers every route and every kept-running process, with effects, defects, and decisions. Tests exist for the chosen behaviors already implemented; pending rows have none. Scheduled jobs cannot be traced without the deployed crontab.
 - [ ] Compare the code inventory with deployed jobs, live schema, and anonymized provider examples. Check: signed-off parity scope and verified column map.
 
 ## 2. Shared Go foundation
@@ -33,7 +33,7 @@ The PHP repository is the behavioral reference. A checked item means the stated 
 
 - [ ] Implement Ishikistaa MO, payment, points, questions, activation, M-Push, renewals, and jobs. Check: product scenario suite, broker replay, and database reconciliation pass.
 - [ ] Implement MegaPromo MO, billing, entries, prize positions, mobile-money push/collection, renewals, and jobs. Check: prize invariants and financial reconciliation pass.
-- [ ] Cover remaining callback routes and formats, including M-Push and XML/JSON collection. Check: redacted provider fixtures and negative security cases pass.
+- [ ] Cover remaining callback routes and formats, including M-Push and XML/JSON collection. Check: redacted provider fixtures and negative security cases pass. Partial evidence: Go intake for the three M-Push routes and the TigoPesa/Mixx JSON push routes, with legacy reply shapes, an explicit identity rule, and negative tests; smoke-tested through MySQL and RabbitMQ. The XML route is not ported pending owner confirmation, and no redacted provider samples exist yet. Workers for these events are pending.
 
 ## 5. Historical data and release
 

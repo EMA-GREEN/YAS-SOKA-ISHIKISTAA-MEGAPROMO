@@ -82,7 +82,9 @@ func TestGuardCoversCallbacksButNotHealth(t *testing.T) {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusForbidden) })
 	}
 	h := Handler{Store: store, Log: slog.Default(), Location: location, Guard: deny}.Routes()
-	for _, path := range []string{"/notification/soka-trivia/billing", "/soka-trivia/notification", "/ishikistaa/notification", "/notification/megapromo"} {
+	for _, path := range []string{"/notification/soka-trivia/billing", "/soka-trivia/notification", "/ishikistaa/notification", "/notification/megapromo",
+		"/soka-mpush/notification", "/ishikistaa-mpush/notification", "/megapromo-mpush/notification",
+		"/notification/megapromo/tigopesapush/collection", "/notification/megapromo/mixxpush/collection"} {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, path, strings.NewReader(sample)))
 		if w.Code != http.StatusForbidden {

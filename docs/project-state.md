@@ -27,6 +27,9 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - Fail-closed callback ingress policy (source allowlist with trusted-proxy handling, optional shared token, report mode, in-flight limit), redacting JSON logger for every process, Prometheus metrics and health on a per-process loopback ops listener (callbacks, relay, consumers, dispatchers), and an env example plus hardened systemd template. See `docs/operations.md`.
 
+- Legacy process and effect matrix (`docs/legacy-process-matrix.md`), covering routes, kept-running processes, external effects, legacy defects (string-built SQL, lossy unconfirmed publishing, disabled TLS checks, public test routes), and Go decisions.
+- Go intake for M-Push subscription-init and MegaPromo TigoPesa/Mixx push callbacks, acknowledged only after durable storage.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

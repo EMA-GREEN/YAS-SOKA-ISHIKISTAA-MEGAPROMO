@@ -65,6 +65,25 @@ func (h Handler) Routes() http.Handler {
 		}
 		mux.Handle("POST "+path, route)
 	}
+	guarded := func(f http.HandlerFunc) http.Handler {
+		if h.Guard != nil {
+			return h.Guard(f)
+		}
+		return f
+	}
+	for path, product := range map[string]string{
+		"/soka-mpush/notification":       "soka",
+		"/ishikistaa-mpush/notification": "ishikistaa",
+		"/megapromo-mpush/notification":  "megapromo",
+	} {
+		p := product
+		mux.Handle("POST "+path, guarded(func(w http.ResponseWriter, r *http.Request) { h.receiveMpush(w, r, p) }))
+	}
+	// The XML tigopesa/collection route and the test routes are not ported; see
+	// docs/legacy-process-matrix.md.
+	for _, path := range []string{"/notification/megapromo/tigopesapush/collection", "/notification/megapromo/mixxpush/collection"} {
+		mux.Handle("POST "+path, guarded(h.receiveTigoPesaPush))
+	}
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
