@@ -10,6 +10,7 @@ import (
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
+	"yas-modernization/internal/messaging"
 )
 
 type Relay struct {
@@ -61,6 +62,9 @@ func (r Relay) runConnection(ctx context.Context) error {
 		return err
 	}
 	if err := ch.QueueBind("yas.callback.events", "#", "yas.callbacks", false, nil); err != nil {
+		return err
+	}
+	if err := messaging.DeclareSokaPointPurchases(ch); err != nil {
 		return err
 	}
 	if err := ch.Confirm(false); err != nil {
