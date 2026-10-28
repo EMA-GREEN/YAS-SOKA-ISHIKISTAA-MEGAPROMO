@@ -47,6 +47,23 @@
 
 The real endpoints are plain HTTP, so they need a transport decision before this dispatcher can reach them.
 
+## M-Push subscription init
+
+**Reference:** `SokaMpushYasSubsInitNotificationConsumer.php`, `SokaLib::sendMpushYasSubscriptionActivation` and `SokaServices::confirmMpushSubsInitActivation`.
+
+**Flow:**
+1. Go receives `soka-mpush/notification` callbacks (`docs/legacy-process-matrix.md`, section 7). Their `soka.MpushSubsInit` events now go to the MO worker instead of the holding queue.
+2. The MO worker records one `activation_attempts` row per request, with state `PENDING`, request ID `MP{callback}{msisdn}`, and the channel and USSD data. A customer without a subscription gets an inactive one.
+3. When the provider's `Activation` callback arrives, it confirms the newest unconfirmed attempt from today or yesterday (Dar es Salaam), as PHP does. An attempt confirmed before it was sent is never sent.
+
+**The guarded `cmd/soka-activation-dispatcher`:**
+- **Request:** it posts PHP's `ACTIVATE` request: offer `017008600010`, the MD5-signed CP password, and the token in `X-Authorization: Bearer`.
+- **Guards:** it is disabled unless `ACTIVATION_DISPATCH_ENABLED=true` and `EXPECTED_DB` matches. It requires HTTPS.
+- **Outcome:** a 2xx response with `responseParam.status` 0 is `SENT`; anything else is `NEEDS_REVIEW` with the provider's status and code. Nothing is resent. PHP sends at once and records whatever comes back; activation may start billing, so Go does not guess.
+- **Metrics:** served on `127.0.0.1:9099`.
+
+PHP reads the access token from `user_access_token`, which `UserAccessToken.php` refreshes. That script is not in any check script, so its schedule is unknown. Go takes the token from `ACTIVATION_ACCESS_TOKEN` until the token refresh is ported. Ishikistaa and MegaPromo M-Push events stay parked.
+
 ## Deliberate differences
 
 | PHP | Go | Why |
@@ -57,7 +74,6 @@ The real endpoints are plain HTTP, so they need a transport decision before this
 | A credit holder's `P300` is spent as a wrong free answer, because credits are checked before purchase keywords. | Purchase and menu keywords are checked first. | Legacy bug. |
 | Using a BOOM credit also reduces normal `CREDIT`. | Only the credit used is reduced. | Legacy bug. |
 | A BOOM credit answer also sends a zero-amount BOOM usage charge to the provider. | Not sent. | Needs the BOOM provider contract. |
-| A `SUBSCRIPTION` confirms the M-Push subscription-init row. | Not done. | The M-Push worker is not ported. |
 | One BOOM notification sits after a `return` and never sends. | Sent whenever a BOOM customer subscribes or reactivates. | The reachable branch sends it. |
 
 ## Evidence

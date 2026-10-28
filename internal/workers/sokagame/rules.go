@@ -176,5 +176,11 @@ var darEsSalaam = func() *time.Location {
 	return time.FixedZone("EAT", 3*60*60)
 }()
 
+// DarDayStart is midnight in Dar es Salaam on t's local date.
+func DarDayStart(t time.Time) time.Time {
+	local := t.In(darEsSalaam)
+	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, darEsSalaam)
+}
+
 // DarDate is the Dar es Salaam calendar date used for dated level bonuses.
 func DarDate(t time.Time) string { return t.In(darEsSalaam).Format("2006-01-02") }

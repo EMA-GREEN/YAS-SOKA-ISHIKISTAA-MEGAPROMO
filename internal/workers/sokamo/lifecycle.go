@@ -3,7 +3,9 @@ package sokamo
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"yas-modernization/internal/workers/sokagame"
@@ -166,6 +168,9 @@ func (p Processor) subscribe(ctx context.Context, m *mo, sub *subscription, boom
 		}
 	case sub.state == "ACTIVE":
 		// Already active: PHP just sends a fresh question without the welcome.
+		if err := m.confirmActivation(ctx, sub); err != nil {
+			return err
+		}
 		if err := m.recordInteraction(ctx, "ACTIVATION", text); err != nil {
 			return err
 		}
@@ -190,6 +195,9 @@ func (p Processor) subscribe(ctx context.Context, m *mo, sub *subscription, boom
 		if points, err = m.balance(ctx); err != nil {
 			return err
 		}
+	}
+	if err := m.confirmActivation(ctx, sub); err != nil {
+		return err
 	}
 	if err := m.recordInteraction(ctx, "ACTIVATION", text); err != nil {
 		return err
@@ -282,6 +290,60 @@ func (m *mo) openQuestion(ctx context.Context, sub *subscription) error {
 		return err
 	}
 	return m.message(ctx, sokagame.KindOpenQuestion, sokagame.OpenQuestionBody(sokagame.OpenQuestionContent, question, m.msisdn, points))
+}
+
+// mpush records the activation request PHP's M-Push consumer sends at once.
+// A customer without a subscription gets an inactive one, which the
+// provider's Activation callback later activates.
+func (p Processor) mpush(ctx context.Context, tx *sql.Tx, callbackID int64, msisdn string, payload []byte) error {
+	var processed int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-mo' AND callback_event_id=?`, callbackID).Scan(&processed)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	var request struct {
+		Channel  string `json:"channel"`
+		USSDData string `json:"ussd_data"`
+	}
+	if err := json.Unmarshal(payload, &request); err != nil || request.Channel == "" {
+		return fmt.Errorf("%w: M-Push payload", ErrNeedsReview)
+	}
+	m := &mo{tx: tx, callbackID: callbackID, msisdn: msisdn}
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code='soka'`).Scan(&m.productID); err != nil {
+		return err
+	}
+	sub, err := m.loadSubscription(ctx)
+	if err != nil {
+		return err
+	}
+	if sub == nil {
+		if sub, err = m.createSubscription(ctx, "INACTIVE", "NORMAL", false, sokagame.IsStaff(msisdn)); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO activation_attempts
+		(subscription_id, product_id, subscriber_id, callback_event_id, external_request_id, channel, state, requested_at, ussd_data)
+		VALUES (?, ?, ?, ?, ?, ?, 'PENDING', UTC_TIMESTAMP(6), ?)`, sub.id, sub.productID, sub.subscriberID, callbackID,
+		"MP"+strconv.FormatInt(callbackID, 10)+msisdn, request.Channel, nullable(request.USSDData)); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('soka-point-mo', ?)`, callbackID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// confirmActivation follows confirmMpushSubsInitActivation: an Activation
+// callback confirms the newest unconfirmed M-Push request from today or
+// yesterday. A request not yet sent is then never sent.
+func (m *mo) confirmActivation(ctx context.Context, sub *subscription) error {
+	_, err := m.tx.ExecContext(ctx, `UPDATE activation_attempts SET state='CONFIRMED', responded_at=UTC_TIMESTAMP(6)
+		WHERE subscription_id=? AND state IN ('PENDING','SENT','NEEDS_REVIEW') AND requested_at >= ?
+		ORDER BY id DESC LIMIT 1`, sub.id, sokagame.DarDayStart(m.now).AddDate(0, 0, -1))
+	return err
 }
 
 // nextQuestion picks a random current question, as PHP picks a random ID in

@@ -37,6 +37,7 @@ func Reset(ctx context.Context, db *sql.DB) error {
 		`DELETE FROM interactions`,
 		`DELETE FROM open_question_deliveries`,
 		`DELETE FROM question_schedules`,
+		`DELETE FROM activation_attempts`,
 		`DELETE FROM credit_awards`,
 		`DELETE FROM product_subscriptions`,
 		`DELETE FROM answer_level_bonuses`,

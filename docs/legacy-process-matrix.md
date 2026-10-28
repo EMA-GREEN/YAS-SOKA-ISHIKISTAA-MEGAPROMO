@@ -39,7 +39,7 @@ The PHP publishers poll a table (`IS_OUTGOING='1'`) about every second, publish 
 | `SokaOpenQuestionScheduler` | scheduler | due `openquestion_schedule` → `tbl_openquestion_notifications` for active, non-DND subscribers in playing, top or all segments | — | **Done** (`cmd/soka-open-question-scheduler`, `docs/soka-boom-and-open-questions.md`) |
 | `SokaOpenQuestionPubliser`, `SokaOpenQuestionConsumer` ×10 | pair | notifications → open question SMS and `tbl_openquestion_logs` | open question SMS | **Done**, replaced by the scheduler and SMS dispatcher |
 | `BoomCustomerCreditAwardPublisher`, `BoomCustomerCreditAwardConsumer` ×10 | pair | `tbl_boom_customer_base` → set `BOOM_CREDIT=1` and notify | SMS | **Done** as the idempotent `cmd/soka-boom-credit-award` |
-| `SokaMpushYasSubsInitNotificationPublisher`, `…Consumer` ×5 | pair | `tbl_mpush_subs_init_notifications_*` → activation | M-Push YAS activation | Pending |
+| `SokaMpushYasSubsInitNotificationPublisher`, `…Consumer` ×5 | pair | `tbl_mpush_subs_init_notifications_*` → activation | M-Push YAS activation | **Done:** activation intents in the MO worker plus the guarded `cmd/soka-activation-dispatcher` |
 
 ### Soka, started by script only
 
@@ -83,7 +83,7 @@ These are reports and email (`*Report*`, `Revenue*`, `MailerScript`, `*Analysis*
 | Tigo Payment charge | `*Lib::sendCharging` (MD5 CP password, offer codes) | Soka point purchase only; guarded, no auto-retry |
 | Interactive SMS (InteractiveRequest) | `*Lib::interactiveRequest`, question and open-question senders | Soka purchase SMS only; guarded |
 | Kannel `sendsms` | reports and some MO paths | Pending |
-| M-Push YAS subscription activation | `*Lib::sendMpushYasSubscriptionActivation` | Pending |
+| M-Push YAS subscription activation | `*Lib::sendMpushYasSubscriptionActivation` | Soka done (guarded); Ishikistaa and MegaPromo pending |
 | Renewal content and subscription requests | `*Lib::sendRenewalContent`, `sendRenewal` | Soka `sendRenewal` done as guarded `renewal_requests` and `cmd/soka-renewal-dispatcher`; renewal content pending |
 | BOOM credit award | `BoomCustomerCreditAwardMessageHandler`, BOOM token API | Pending |
 | TigoPesa / Mixx push collection | `TigoMegaPromoMobileMoneyController` | Pending |

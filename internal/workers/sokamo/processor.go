@@ -78,6 +78,8 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	}
 	switch kind {
 	case "InteractiveResponse", "Activation", "RequestSendSms", "DeActivation":
+	case callbacks.KindMpushSubsInit:
+		return p.mpush(ctx, tx, callbackID, msisdn, payload)
 	default:
 		return ErrNotApplicable
 	}

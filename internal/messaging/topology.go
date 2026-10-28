@@ -40,7 +40,7 @@ func DeclareSokaMO(ch *amqp.Channel) error {
 		return err
 	}
 	// The MO worker owns customer MOs and the provider's subscription callbacks.
-	for _, key := range []string{"soka.InteractiveResponse", "soka.Activation", "soka.RequestSendSms", "soka.DeActivation"} {
+	for _, key := range []string{"soka.InteractiveResponse", "soka.Activation", "soka.RequestSendSms", "soka.DeActivation", "soka.MpushSubsInit"} {
 		if err := ch.QueueBind("yas.soka.point-mo", key, "yas.callbacks", false, nil); err != nil {
 			return err
 		}
@@ -53,7 +53,7 @@ func DeclareSokaMO(ch *amqp.Channel) error {
 // Any other routing key is unroutable, so the relay's mandatory publish fails
 // and the event becomes a visible outbox dead letter instead of vanishing.
 var parked = map[string][]string{
-	"yas.soka.pending":       {"soka.MpushSubsInit"},
+	"yas.soka.pending":       {},
 	"yas.ishikistaa.pending": {"ishikistaa.#"},
 	"yas.megapromo.pending":  {"megapromo.#"},
 }
@@ -62,7 +62,7 @@ var parked = map[string][]string{
 // bindings outlive code, so they are removed explicitly; RabbitMQ accepts
 // unbinding a binding that does not exist.
 var retired = map[string][]string{
-	"yas.soka.pending": {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms"},
+	"yas.soka.pending": {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms", "soka.MpushSubsInit"},
 }
 
 // DeclareParked declares the holding queues. Workers that take over a kind must

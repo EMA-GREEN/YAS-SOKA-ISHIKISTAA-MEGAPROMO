@@ -37,6 +37,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - Soka BOOM credit award rounds (`cmd/soka-boom-credit-award`, migration 007) and open questions, both scheduled (`cmd/soka-open-question-scheduler`, migration 008) and on the provider's no-open-question reason.
 
+- Soka M-Push subscription-init activations: intents in the MO worker, confirmation on Activation, and the guarded `cmd/soka-activation-dispatcher` (migration 009).
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

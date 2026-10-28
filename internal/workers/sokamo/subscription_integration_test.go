@@ -220,6 +220,31 @@ func TestSubscriptionLifecycleIntegration(t *testing.T) {
 		t.Fatal("staff subscription")
 	}
 
+	// M-Push subscription-init: an activation request for a new customer, confirmed
+	// by the provider's later Activation callback.
+	const pushed = "255700000177"
+	mpush, _, err := callbacks.ParseMpush("soka", []byte(`{"msisdn":"`+pushed+`","channel":"USSD","ussd_data":"*150*1#"}`), time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mpushID, err := store.Save(ctx, mpush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run("mpush", mpushID, nil)
+	run("mpush replay", mpushID, nil)
+	if st, _, _, _, _ := state(pushed); st != "INACTIVE" {
+		t.Fatal("M-Push must create an inactive subscription")
+	}
+	if text(`SELECT CONCAT(a.state,'/',a.channel,'/',a.ussd_data,'/',a.external_request_id) FROM activation_attempts a JOIN subscribers s ON s.id=a.subscriber_id WHERE s.msisdn=?`, pushed) !=
+		fmt.Sprintf("PENDING/USSD/*150*1#/MP%d%s", mpushID, pushed) {
+		t.Fatal("activation attempt")
+	}
+	run("activation confirms push", send(pushed, "Activation", map[string]string{"SubscriptionStatus": "A"}), nil)
+	if st, _, _, _, _ := state(pushed); st != "ACTIVE" || count(`SELECT COUNT(*) FROM activation_attempts WHERE state='CONFIRMED'`) != 1 {
+		t.Fatal("Activation must activate and confirm the M-Push request")
+	}
+
 	// An unknown customer's MO creates an inactive subscription and an invitation.
 	run("stranger MO", send("255700000188", "InteractiveResponse", map[string]string{"CustomerResponse": "hello"}), nil)
 	if st, _, _, _, _ := state("255700000188"); st != "INACTIVE" {

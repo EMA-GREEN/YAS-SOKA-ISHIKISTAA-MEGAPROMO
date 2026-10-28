@@ -132,7 +132,7 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 		t.Fatal("unknown Soka kind was not returned")
 	}
 	// Kinds received before their workers exist are parked, not dropped.
-	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.pending",
+	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.point-mo",
 		"soka.Activation": "yas.soka.point-mo", "soka.DeActivation": "yas.soka.point-mo", "soka.RequestSendSms": "yas.soka.point-mo"} {
 		if returned := publishConfirmed(t, conn, "yas.callbacks", key, "106", true); returned {
 			t.Fatalf("%s returned", key)
