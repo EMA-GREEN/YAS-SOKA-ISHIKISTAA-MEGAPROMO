@@ -4,7 +4,7 @@ Updated: 2026-10-28 (Africa/Dar_es_Salaam)
 
 ## Locations
 
-- New Go implementation: `/Users/dany/Documents/ChatGPT/YAS-SOKA-ISHIKISTAA-MEGAPROMO`
+- New Go implementation: `/Users/dany/Projects/work/YAS-SOKA-ISHIKISTAA-MEGAPROMO-GO`
 - Existing PHP reference, unchanged: `/Users/dany/Projects/work/YAS-SOKA-ISHIKISTAA-MEGAPROMO`
 
 ## Confirmed context
