@@ -7,3 +7,5 @@ coverage.out
 bin/
 *.sql.gz
 *.dump
+deploy/compose/migrations/
+reports/

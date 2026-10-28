@@ -27,7 +27,7 @@ import (
 	mysqlstore "yas-modernization/internal/store/mysql"
 )
 
-const syntheticPrefix = "2557999" // MSISDNs outside the real numbering in tests
+const syntheticPrefix = "2557998" // synthetic MSISDNs; the system tests use 2557999
 
 func main() {
 	target := flag.String("target", "http://127.0.0.1:18080/soka-trivia/notification", "callback endpoint")

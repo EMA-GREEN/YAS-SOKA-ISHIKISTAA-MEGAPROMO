@@ -1,0 +1,55 @@
+# Local test stack: every Go service against MySQL and RabbitMQ, with the fake
+# Tigo provider. Ports are published on loopback only. Secrets come from the
+# environment (scripts/test-all.sh generates them); none are committed.
+name: yas-test
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: ${YAS_DB_ROOT_PASSWORD:?set by scripts/test-all.sh}
+      MYSQL_DATABASE: yas_test_system
+      MYSQL_USER: yas
+      MYSQL_PASSWORD: ${YAS_DB_PASSWORD:?set by scripts/test-all.sh}
+    # Triggers in the integration suites need this without SUPER.
+    command: ["--log-bin-trust-function-creators=1", "--skip-log-bin"]
+    volumes:
+      - ./mysql-init.sql:/docker-entrypoint-initdb.d/10-integration.sql:ro
+    ports: ["127.0.0.1:13306:3306"]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 2s
+      retries: 60
+  rabbitmq:
+    image: rabbitmq:4.1-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: yas
+      RABBITMQ_DEFAULT_PASS: ${YAS_AMQP_PASSWORD:?set by scripts/test-all.sh}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 3s
+      retries: 60
+  # A separate broker for the integration suites, which purge and consume
+  # queues and must not take messages meant for the running services.
+  rabbitmq-it:
+    image: rabbitmq:4.1-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: yas
+      RABBITMQ_DEFAULT_PASS: ${YAS_AMQP_PASSWORD:?set by scripts/test-all.sh}
+    ports: ["127.0.0.1:15673:5672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 3s
+      retries: 60
+  app:
+    build: .
+    depends_on:
+      mysql: {condition: service_healthy}
+      rabbitmq: {condition: service_healthy}
+    environment:
+      YAS_DB_PASSWORD: ${YAS_DB_PASSWORD}
+      YAS_AMQP_PASSWORD: ${YAS_AMQP_PASSWORD}
+      YAS_INGRESS_TOKEN: ${YAS_INGRESS_TOKEN:?set by scripts/test-all.sh}
+    ports:
+      - "127.0.0.1:18080:18080"   # callbacks
+      - "127.0.0.1:18090:18090"   # fake provider
+      - "127.0.0.1:19091-19101:19091-19101"   # ops listeners

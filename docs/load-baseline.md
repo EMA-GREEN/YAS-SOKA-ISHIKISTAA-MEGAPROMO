@@ -6,7 +6,7 @@ These numbers come from a developer laptop. They are for comparing changes, **no
 
 `cmd/yas-loadgen` drives the load:
 - **Safety:** it refuses a non-loopback target unless given `-allow-remote`, and refuses any database not named `yas_test_`.
-- **Seeding:** with `-seed` it creates the Soka product, one question, and active synthetic subscribers (`2557999…`).
+- **Seeding:** with `-seed` it creates the Soka product, one question, and active synthetic subscribers (`2557998…`).
 - **Traffic:** it posts Soka `InteractiveResponse` callbacks, 70% answers (each creates a 99 TZS charge intent) and 30% `help` replies.
 - **Measurement:** it measures HTTP intake. With `-wait` it also waits until the MO worker has processed every accepted callback.
 
