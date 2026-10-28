@@ -33,6 +33,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - Soka paid-answer gameplay across the MO and payment workers, with migration `005_soka_answers.sql`: current question, answer level, answer scoring, fallback attempts, and dated level bonuses.
 - Broker topology: the catch-all `yas.callback.events` queue (bound to `#`, no consumer) is removed. Received kinds without a worker are parked in `yas.{soka,ishikistaa,megapromo}.pending`, and any other kind is unroutable, so it becomes a visible outbox dead letter. Integration tests share `internal/testdb.Reset`, so they can run in sequence against one database.
 
+- Soka subscription lifecycle (activation, reactivation, unsubscription, inactive and unknown subscribers), free and BOOM credit answers, and guarded renewal-system intents with `cmd/soka-renewal-dispatcher`. Migration `006_soka_subscriptions.sql`.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

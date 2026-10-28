@@ -25,6 +25,8 @@ func Reset(ctx context.Context, db *sql.DB) error {
 		`UPDATE product_subscriptions SET current_question_id=NULL`,
 		`UPDATE payment_attempts SET fallback_of_attempt_id=NULL`,
 		`DELETE FROM processed_events`,
+		`DELETE FROM renewal_requests`,
+		`DELETE FROM subscription_events`,
 		`DELETE FROM outbound_message_events`,
 		`DELETE FROM outbound_messages`,
 		`DELETE FROM point_ledger`,

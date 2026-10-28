@@ -132,7 +132,8 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 		t.Fatal("unknown Soka kind was not returned")
 	}
 	// Kinds received before their workers exist are parked, not dropped.
-	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.pending"} {
+	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.pending",
+		"soka.Activation": "yas.soka.point-mo", "soka.DeActivation": "yas.soka.point-mo", "soka.RequestSendSms": "yas.soka.point-mo"} {
 		if returned := publishConfirmed(t, conn, "yas.callbacks", key, "106", true); returned {
 			t.Fatalf("%s returned", key)
 		}
@@ -144,6 +145,9 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	}
 	if returned := publishConfirmed(t, conn, "yas.callbacks", "soka.Payment", "104", true); returned {
 		t.Fatal("routed replay test returned")
+	}
+	if info, err := ch.QueueInspect("yas.soka.pending"); err != nil || info.Messages != 0 {
+		t.Fatalf("subscription kinds still parked: %d %v", info.Messages, err)
 	}
 	consumer, err := conn.Channel()
 	if err != nil {

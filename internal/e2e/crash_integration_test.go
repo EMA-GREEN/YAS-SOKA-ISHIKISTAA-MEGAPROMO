@@ -217,6 +217,7 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 	// Even subscribers buy points; odd ones answer, and every answer's 99 TZS
 	// charge fails for low balance so it goes through the 45 TZS fallback.
 	const purchases, answers = subscribers / 2, subscribers / 2
+	const newCustomers = 10
 	wantPoints := make(map[string]int64, subscribers)
 	for i := 1; i <= subscribers; i++ {
 		msisdn := fmt.Sprintf("2557000%05d", i)
@@ -260,6 +261,10 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 			body := fmt.Sprintf(`{"requestId":"MO-CRASH-%d","requestParam":{"data":[{"name":"Msisdn","value":%q},{"name":"Type","value":"InteractiveResponse"},{"name":"CustomerResponse","value":%q},{"name":"TransactionId","value":"T-%d"}]}}`,
 				i, msisdn, text, i)
 			save(t, ctx, store, body)
+			if i <= newCustomers {
+				// New customers activate through the provider's Activation callback.
+				save(t, ctx, store, fmt.Sprintf(`{"requestId":"ACT-CRASH-%d","requestParam":{"data":[{"name":"Msisdn","value":"2557009%05d"},{"name":"Type","value":"Activation"},{"name":"SubscriptionStatus","value":"A"}]}}`, i, i))
+			}
 			time.Sleep(250 * time.Millisecond)
 		}
 	}()
@@ -336,6 +341,7 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 	// processes expire after 30 seconds, so allow for that.
 	converged := waitFor(ctx, 150*time.Second, func() bool {
 		return count(t, ctx, store.DB, `SELECT COUNT(*) FROM point_ledger`) == subscribers &&
+			count(t, ctx, store.DB, `SELECT COUNT(*) FROM subscription_events`) == newCustomers &&
 			count(t, ctx, store.DB, `SELECT COUNT(*) FROM callback_outbox WHERE published_at IS NULL`) == 0 &&
 			queued(t, ch, "yas.soka.point-mo", "yas.soka.point-purchases") == 0
 	})
@@ -358,7 +364,10 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 	for query, want := range map[string]int{
 		`SELECT COUNT(*) FROM callback_events WHERE event_kind='InteractiveResponse'`:                        subscribers,
 		`SELECT COUNT(*) FROM callback_events WHERE event_kind='Payment'`:                                    payments,
-		`SELECT COUNT(*) FROM interactions`:                                                                  subscribers,
+		`SELECT COUNT(*) FROM interactions`:                                                                  subscribers + newCustomers,
+		`SELECT COUNT(*) FROM product_subscriptions WHERE state='ACTIVE'`:                                    subscribers + newCustomers,
+		`SELECT COUNT(*) FROM subscription_events WHERE event_kind='SUBSCRIBED'`:                             newCustomers,
+		`SELECT COUNT(*) FROM renewal_requests WHERE activity_type='SUBSCRIPTION'`:                           2 * newCustomers,
 		`SELECT COUNT(*) FROM answers`:                                                                       answers,
 		`SELECT COUNT(*) FROM payment_attempts`:                                                              payments,
 		`SELECT COUNT(*) FROM payment_attempts WHERE state='SUCCESS'`:                                        subscribers,
@@ -368,9 +377,9 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 		`SELECT COUNT(*) FROM payment_events`:                                                                payments,
 		`SELECT COUNT(*) FROM point_ledger`:                                                                  subscribers,
 		`SELECT COUNT(*) FROM point_ledger WHERE reason='ANSWER'`:                                            answers,
-		`SELECT COUNT(*) FROM outbound_messages`:                                                             subscribers,
-		`SELECT COUNT(*) FROM outbound_messages WHERE message_kind='QUESTION'`:                               answers,
-		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-mo'`:                          subscribers,
+		`SELECT COUNT(*) FROM outbound_messages`:                                                             subscribers + newCustomers,
+		`SELECT COUNT(*) FROM outbound_messages WHERE message_kind='QUESTION'`:                               answers + newCustomers,
+		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-mo'`:                          subscribers + newCustomers,
 		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-purchase'`:                    payments,
 		`SELECT COUNT(*) FROM callback_outbox WHERE dead_lettered_at IS NOT NULL OR published_at IS NULL`:    0,
 	} {

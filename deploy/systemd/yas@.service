@@ -1,5 +1,6 @@
 # Template unit: yas@callbacks, yas@outbox-relay, yas@soka-mo-worker,
-# yas@soka-point-worker, yas@soka-charge-dispatcher, yas@soka-sms-dispatcher.
+# yas@soka-point-worker, yas@soka-charge-dispatcher, yas@soka-sms-dispatcher,
+# yas@soka-renewal-dispatcher.
 # Binaries are built with: CGO_ENABLED=0 go build -o /opt/yas/bin/ ./cmd/...
 [Unit]
 Description=YAS %i

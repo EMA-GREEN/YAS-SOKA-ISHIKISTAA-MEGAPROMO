@@ -39,7 +39,13 @@ func DeclareSokaMO(ch *amqp.Channel) error {
 	if _, err := ch.QueueDeclare("yas.soka.point-mo", true, false, false, false, arguments); err != nil {
 		return err
 	}
-	return ch.QueueBind("yas.soka.point-mo", "soka.InteractiveResponse", "yas.callbacks", false, nil)
+	// The MO worker owns customer MOs and the provider's subscription callbacks.
+	for _, key := range []string{"soka.InteractiveResponse", "soka.Activation", "soka.RequestSendSms", "soka.DeActivation"} {
+		if err := ch.QueueBind("yas.soka.point-mo", key, "yas.callbacks", false, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Callback kinds the intake accepts but no Go worker handles yet. Each product
@@ -47,13 +53,20 @@ func DeclareSokaMO(ch *amqp.Channel) error {
 // Any other routing key is unroutable, so the relay's mandatory publish fails
 // and the event becomes a visible outbox dead letter instead of vanishing.
 var parked = map[string][]string{
-	"yas.soka.pending":       {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms", "soka.MpushSubsInit"},
+	"yas.soka.pending":       {"soka.MpushSubsInit"},
 	"yas.ishikistaa.pending": {"ishikistaa.#"},
 	"yas.megapromo.pending":  {"megapromo.#"},
 }
 
+// Bindings removed from parked when a worker took the kind over. Broker
+// bindings outlive code, so they are removed explicitly; RabbitMQ accepts
+// unbinding a binding that does not exist.
+var retired = map[string][]string{
+	"yas.soka.pending": {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms"},
+}
+
 // DeclareParked declares the holding queues. Workers that take over a kind must
-// bind their own queue and remove the kind here in the same change.
+// bind their own queue and move the kind from parked to retired in the same change.
 func DeclareParked(ch *amqp.Channel) error {
 	for queue, keys := range parked {
 		if _, err := ch.QueueDeclare(queue, true, false, false, false, nil); err != nil {
@@ -61,6 +74,14 @@ func DeclareParked(ch *amqp.Channel) error {
 		}
 		for _, key := range keys {
 			if err := ch.QueueBind(queue, key, "yas.callbacks", false, nil); err != nil {
+				return err
+			}
+		}
+	}
+	// Retired queues are a subset of parked ones, so they exist by now.
+	for queue, keys := range retired {
+		for _, key := range keys {
+			if err := ch.QueueUnbind(queue, key, "yas.callbacks", nil); err != nil {
 				return err
 			}
 		}

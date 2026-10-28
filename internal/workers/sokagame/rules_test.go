@@ -89,3 +89,24 @@ func TestMessages(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSubscriptionRules(t *testing.T) {
+	if !IsStaff("255715123456") || !IsStaff("x255678123") || IsStaff("255700000001") {
+		t.Fatal("staff series")
+	}
+	if !IsReactivation(" SOKA ") || IsReactivation("soka!") {
+		t.Fatal("reactivation word")
+	}
+	if got := WelcomeQuestion(0, "Q"); got != "Una point 0. PAPO HAPO unabahatika na SOKA;Q. Vigezo na masharti bofya http://www.yassports.co.tz/terms-and-conditions" {
+		t.Fatal(got)
+	}
+	if got := ReactivationQuestion(75, "Q"); got != "Una point 75. PAPO HAPO unabahatika na SOKA;Q." {
+		t.Fatal(got)
+	}
+	if got := CreditQuestion(125, 2, "Q"); got != "Unapoint 125!KETE 2 Buree!Q" {
+		t.Fatal(got)
+	}
+	if got := CreditQuestion(125, 0, "Q"); got != "Unapoint 125!Q" {
+		t.Fatal(got)
+	}
+}

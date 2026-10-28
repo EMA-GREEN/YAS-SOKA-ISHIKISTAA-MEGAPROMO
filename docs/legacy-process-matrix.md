@@ -31,7 +31,7 @@ The PHP publishers poll a table (`IS_OUTGOING='1'`) about every second, publish 
 | Process | Kind | Input → output | External effects | Go status |
 |---|---|---|---|---|
 | `SokaMoNotificationPublisher` | publisher | `tbl_interaction_mo_notifications` → `tigo_soka_mo_router` | — | Replaced by outbox relay |
-| `SokaMoConsumer` ×15 | consumer | MO: `QUERY_POINTS`, `SUBSCRIPTION`, `UN_SUBSCRIPTION`, `ondoa`, `soka` reactivation, answer to the current question (golden-hour scoring, levels and rewards), BOOM credit play, point-purchase keywords and menu, Predict-and-Win | Tigo Payment charge; InteractiveRequest SMS; open question; renewal subscription request | **Point purchase, paid answers, keyword replies** (`internal/workers/sokamo`, `docs/soka-answer-flow.md`) |
+| `SokaMoConsumer` ×15 | consumer | MO: `QUERY_POINTS`, `SUBSCRIPTION`, `UN_SUBSCRIPTION`, `ondoa`, `soka` reactivation, answer to the current question (golden-hour scoring, levels and rewards), BOOM credit play, point-purchase keywords and menu, Predict-and-Win | Tigo Payment charge; InteractiveRequest SMS; open question; renewal subscription request | **Point purchase, paid and free-credit answers, keyword replies, subscription lifecycle with renewal-system intents** (`internal/workers/sokamo`, `docs/soka-answer-flow.md`, `docs/soka-subscription-flow.md`) |
 | `SokaPaymentNotificationPublisher` | publisher | `tbl_payment_*` (SMS channel) → `tigo_soka_payment_router` | — | Replaced by outbox relay |
 | `SokaPaymentConsumers` ×50 | consumer | payment result for answer charges, point purchases, BOOM; updates `vas_transaction_trivia*`, `tbl_qn_answers`, `tbl_qn_subscribers`, `tbl_point_purchase_*`; low-balance fallback via `tbl_mo_retry` | follow-up charge; result SMS; `sms_reprocess` on failure | **Point purchase and answer charges, including the low-balance ladder** (`internal/workers/sokapoints`) |
 | `SokaWebPaymentNotificationPublisher`, `SokaWebPaymentConsumers` ×5 | pair | web channel payment results → answers and subscriber state | — | Pending |
@@ -84,7 +84,7 @@ These are reports and email (`*Report*`, `Revenue*`, `MailerScript`, `*Analysis*
 | Interactive SMS (InteractiveRequest) | `*Lib::interactiveRequest`, question and open-question senders | Soka purchase SMS only; guarded |
 | Kannel `sendsms` | reports and some MO paths | Pending |
 | M-Push YAS subscription activation | `*Lib::sendMpushYasSubscriptionActivation` | Pending |
-| Renewal content and subscription requests | `*Lib::sendRenewalContent`, `sendRenewal` | Pending |
+| Renewal content and subscription requests | `*Lib::sendRenewalContent`, `sendRenewal` | Soka `sendRenewal` done as guarded `renewal_requests` and `cmd/soka-renewal-dispatcher`; renewal content pending |
 | BOOM credit award | `BoomCustomerCreditAwardMessageHandler`, BOOM token API | Pending |
 | TigoPesa / Mixx push collection | `TigoMegaPromoMobileMoneyController` | Pending |
 | Email reports | `MailerScript` (PHPMailer) | Out of scope until the owner confirms |

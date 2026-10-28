@@ -102,7 +102,7 @@ func (d Dispatcher) claim(ctx context.Context) (*message, error) {
 	var item message
 	err = tx.QueryRowContext(ctx, `SELECT m.id,m.product_id,m.subscriber_id,s.msisdn,m.body_text
 		FROM outbound_messages m JOIN products p ON p.id=m.product_id JOIN subscribers s ON s.id=m.subscriber_id
-		WHERE p.code='soka' AND m.message_kind IN ('POINT_PURCHASE_RESULT','POINT_PURCHASE_MENU','QUESTION','REWARD_MSG','POINT_MSG','HELP_MESSAGE','ONDOA_UNSUB_SMS','LOW_BALANCE','ERROR')
+		WHERE p.code='soka' AND m.message_kind IN ('POINT_PURCHASE_RESULT','POINT_PURCHASE_MENU','QUESTION','REWARD_MSG','POINT_MSG','HELP_MESSAGE','ONDOA_UNSUB_SMS','LOW_BALANCE','ERROR','BOOM_CREDIT_NOTIFY','NON_SUBSCRIBER','INACTIVE_SUB')
 		AND m.delivery_state='PENDING' ORDER BY m.id LIMIT 1 FOR UPDATE SKIP LOCKED`).
 		Scan(&item.id, &item.productID, &item.subscriberID, &item.msisdn, &item.body)
 	if errors.Is(err, sql.ErrNoRows) {

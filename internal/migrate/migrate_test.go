@@ -11,7 +11,7 @@ func TestLoadCurrentMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"001_callback_inbox_outbox.sql", "002_core_domain.sql", "003_charge_intents.sql", "004_charge_dispatch.sql", "005_soka_answers.sql"}
+	want := []string{"001_callback_inbox_outbox.sql", "002_core_domain.sql", "003_charge_intents.sql", "004_charge_dispatch.sql", "005_soka_answers.sql", "006_soka_subscriptions.sql"}
 	if len(files) != len(want) {
 		t.Fatalf("got %d migrations, want %d", len(files), len(want))
 	}
@@ -20,7 +20,7 @@ func TestLoadCurrentMigrations(t *testing.T) {
 			t.Fatalf("migration %d is %s, want %s", i, files[i].Name, name)
 		}
 	}
-	if len(files[0].Statements) < 2 || len(files[1].Statements) < 15 || len(files[2].Statements) != 2 || len(files[3].Statements) != 1 || len(files[4].Statements) != 4 {
+	if len(files[0].Statements) < 2 || len(files[1].Statements) < 15 || len(files[2].Statements) != 2 || len(files[3].Statements) != 1 || len(files[4].Statements) != 4 || len(files[5].Statements) != 2 {
 		t.Fatal("migration statements missing")
 	}
 }

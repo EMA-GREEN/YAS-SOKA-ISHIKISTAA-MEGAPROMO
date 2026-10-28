@@ -19,14 +19,14 @@ With both an allowlist and a token, both must pass. `enforce` and `report` need 
 ## Telemetry
 
 - **Logs:** every process writes JSON through `obs.NewLogger`. It drops values under keys such as `msisdn`, `payload`, `token`, `password` and `dsn`. In all other strings and error messages it masks runs of 9 or more digits (MSISDNs, which also hides long timestamps) and `user:secret@` credentials. Numeric attributes such as event IDs are kept.
-- **Metrics:** every process serves Prometheus text format with `/healthz` and `/readyz` (database ping) on its own loopback port. The ports are callbacks 9091, outbox-relay 9092, soka-mo-worker 9093, soka-point-worker 9094, soka-charge-dispatcher 9095 and soka-sms-dispatcher 9096; `OPS_ADDR` overrides the port. The callback server never serves metrics on its public listener. A process whose ops port is taken refuses to start.
+- **Metrics:** every process serves Prometheus text format with `/healthz` and `/readyz` (database ping) on its own loopback port. The ports are callbacks 9091, outbox-relay 9092, soka-mo-worker 9093, soka-point-worker 9094, soka-charge-dispatcher 9095, soka-sms-dispatcher 9096 and soka-renewal-dispatcher 9097; `OPS_ADDR` overrides the port. The callback server never serves metrics on its public listener. A process whose ops port is taken refuses to start.
   - `yas_callback_requests_total{product,outcome}` with outcomes `accepted`, `invalid`, `too_large`, `conflict` and `unavailable`
   - `yas_callback_duration_seconds{product}`
   - `yas_ingress_denied_total{reason,mode}` with reasons `source_not_allowed`, `bad_token` and `bad_client_address`
   - `yas_ingress_overloaded_total`
   - relay: `yas_relay_published_total{product,kind}`, `yas_relay_publish_failures_total{product,kind}`, `yas_relay_connected`, and the database-read gauges `yas_outbox_backlog`, `yas_outbox_dead_letters` and `yas_outbox_oldest_pending_seconds`
   - consumers: `yas_consumer_messages_total{consumer,outcome}` with outcomes `processed`, `not_applicable`, `review` (dead-lettered), `invalid_id` and `retry` (left for redelivery); `yas_consumer_process_seconds{consumer}`; `yas_consumer_connected{consumer}`
-  - dispatchers: `yas_charge_intents{state}` and `yas_outbound_messages{state}` for the open and review states only (terminal states grow without bound), and `yas_dispatch_attempts_total{dispatcher,result}` with results `ok`, `uncertain` (claimed, needs manual review) and `failed_before_claim`
+  - dispatchers: `yas_charge_intents{state}`, `yas_outbound_messages{state}` and `yas_renewal_requests{state}` for the open and review states only (terminal states grow without bound), and `yas_dispatch_attempts_total{dispatcher,result}` with results `ok`, `uncertain` (claimed, needs manual review) and `failed_before_claim`
 - Gauges read from the database at scrape time are omitted when the read fails, so alerts see missing data rather than a false zero.
 - Label values come only from fixed sets in code, never from request input. The relay's `kind` label is limited to the event types seen in the PHP controllers, and anything else is counted as `other`.
 - Queue depth and consumer counts come from RabbitMQ's own `rabbitmq_prometheus` plugin rather than these processes. Watch the `yas.*.pending` holding queues: they keep callback kinds whose workers do not exist yet and have no consumer.

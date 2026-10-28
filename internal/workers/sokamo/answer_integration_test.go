@@ -239,7 +239,7 @@ func TestAnswerJourneyIntegration(t *testing.T) {
 		t.Fatal("help and ondoa replies")
 	}
 	for request, c := range map[string][2]string{
-		"SKIP-STOP": {"stop", ""}, "SKIP-PREDICT": {"M2-1", ""}, "SKIP-OPEN": {"A", "No open question for the subscriber"},
+		"SKIP-PREDICT": {"M2-1", ""}, "SKIP-OPEN": {"A", "No open question for the subscriber"},
 	} {
 		if err := mo.Process(ctx, sendMO(request, c[0], c[1])); !errors.Is(err, ErrNotApplicable) {
 			t.Errorf("%s err=%v", request, err)

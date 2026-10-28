@@ -29,13 +29,27 @@ type subscription struct {
 	state, segment              string
 	questionID                  sql.NullInt64
 	level                       int64
+	freeCredits, boomCredits    int64
 }
 
-// Process handles an active subscriber's MO in one transaction: a point
-// purchase or an answer becomes a pending charge, and keyword queries become
-// message intents. Unknown P-number keywords receive a menu and never charge.
-// Subscription, unsubscription, Predict-and-Win, open questions, and free-credit
-// play are not ported and are left unprocessed.
+// mo is one callback being processed inside its transaction.
+type mo struct {
+	tx                  *sql.Tx
+	callbackID          int64
+	msisdn, requestID   string
+	fields              map[string]string
+	now                 time.Time
+	productID           int64
+	subscriberID        int64
+	interactionID       int64
+	messageSeq          int
+	interactionRecorded bool
+}
+
+// Process handles a Soka subscriber's MO, activation, or deactivation in one
+// transaction, following the order of SokaMoConsumer.php. Charges become
+// pending intents; replies and renewal-system calls become intents too.
+// Predict-and-Win and open questions are not ported and are left unprocessed.
 func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if callbackID <= 0 {
 		return fmt.Errorf("%w: invalid callback ID", ErrNeedsReview)
@@ -59,18 +73,33 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	if product != "soka" || kind != "InteractiveResponse" {
+	if product != "soka" {
+		return ErrNotApplicable
+	}
+	switch kind {
+	case "InteractiveResponse", "Activation", "RequestSendSms", "DeActivation":
+	default:
 		return ErrNotApplicable
 	}
 	fields, err := namedValues(payload)
 	if err != nil {
 		return fmt.Errorf("%w: invalid payload", ErrNeedsReview)
 	}
-	text := fields["CustomerResponse"]
-	class := sokagame.Classify(text, fields["Reason"])
-	switch class {
-	case sokagame.Predict, sokagame.OpenQuestion, sokagame.Unsubscribe:
+	if fields["OfferCode"] == sokagame.TestOfferCode {
 		return ErrNotApplicable
+	}
+	// PHP records an activation as a subscription only when SubscriptionStatus
+	// is A. Otherwise it stores an MO with no text, which the MO worker would
+	// charge as an answer; Go ignores it.
+	if (kind == "Activation" || kind == "RequestSendSms") && fields["SubscriptionStatus"] != "A" {
+		return ErrNotApplicable
+	}
+	class := sokagame.Answer
+	if kind == "InteractiveResponse" {
+		class = sokagame.Classify(fields["CustomerResponse"], fields["Reason"])
+		if class == sokagame.Predict || class == sokagame.OpenQuestion {
+			return ErrNotApplicable
+		}
 	}
 	var processed int
 	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-mo' AND callback_event_id=?`, callbackID).Scan(&processed)
@@ -84,60 +113,21 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil || event.RequestID != requestID || event.MSISDN != msisdn {
 		return fmt.Errorf("%w: callback identity", ErrNeedsReview)
 	}
-	var sub subscription
-	err = tx.QueryRowContext(ctx, `SELECT ps.id, ps.product_id, ps.subscriber_id, ps.state, ps.billing_segment, ps.current_question_id, ps.answer_level
-		FROM product_subscriptions ps JOIN products p ON p.id=ps.product_id JOIN subscribers s ON s.id=ps.subscriber_id
-		WHERE p.code='soka' AND s.msisdn=? FOR UPDATE`, msisdn).
-		Scan(&sub.id, &sub.productID, &sub.subscriberID, &sub.state, &sub.segment, &sub.questionID, &sub.level)
-	charges := class == sokagame.Purchase || class == sokagame.Answer
-	if errors.Is(err, sql.ErrNoRows) || (err == nil && sub.state != "ACTIVE") {
-		// PHP subscribes or reactivates here; those flows are not ported. A
-		// charge request without a subscription is surfaced for review.
-		if charges || class == sokagame.PurchaseMenu {
-			return fmt.Errorf("%w: subscription not found or inactive", ErrNeedsReview)
-		}
-		return ErrNotApplicable
+	m := &mo{tx: tx, callbackID: callbackID, msisdn: msisdn, requestID: requestID, fields: fields, now: now}
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM products WHERE code='soka'`).Scan(&m.productID); err != nil {
+		return err
 	}
+	sub, err := m.loadSubscription(ctx)
 	if err != nil {
 		return err
 	}
-	if charges && sub.segment == "UNVERIFIED" {
-		return fmt.Errorf("%w: billing segment unverified", ErrNeedsReview)
-	}
-	interactionResult, err := tx.ExecContext(ctx, `INSERT INTO interactions
-		(product_id, subscriber_id, external_request_id, interaction_kind, inbound_text, occurred_at)
-		VALUES (?, ?, ?, 'MO', ?, UTC_TIMESTAMP(6))`, sub.productID, sub.subscriberID, requestID, text)
-	if err != nil {
-		return err
-	}
-	interactionID, err := interactionResult.LastInsertId()
-	if err != nil {
-		return err
-	}
-	message := func(kind, body string) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO outbound_messages
-			(product_id, subscriber_id, interaction_id, message_kind, body_text, delivery_state, source_event_key)
-			VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`, sub.productID, sub.subscriberID, interactionID, kind, body, sourceKey(callbackID))
-		return err
-	}
-	switch class {
-	case sokagame.PurchaseMenu:
-		err = message("POINT_PURCHASE_MENU", purchaseMenu)
-	case sokagame.Help:
-		err = message(sokagame.KindHelp, sokagame.HelpMsg)
-	case sokagame.OndoaInfo:
-		err = message(sokagame.KindOndoa, sokagame.OndoaMsg)
-	case sokagame.Points:
-		var balance int64
-		if err = tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(delta_points),0) FROM point_ledger WHERE product_id=? AND subscriber_id=?`,
-			sub.productID, sub.subscriberID).Scan(&balance); err == nil {
-			err = message(sokagame.KindPoints, sokagame.PointsMessage(balance, msisdn))
-		}
-	case sokagame.Purchase:
-		amount, _ := sokagame.PurchaseAmount(text)
-		_, err = charge(ctx, tx, sub, interactionID, callbackID, "PU"+strconv.FormatInt(callbackID, 10)+msisdn, "POINT_PURCHASE", amount, offerFor(sub.segment), fields["TransactionId"])
-	case sokagame.Answer:
-		err = p.answer(ctx, tx, sub, interactionID, callbackID, msisdn, text, fields["TransactionId"], now)
+	switch kind {
+	case "Activation", "RequestSendSms":
+		err = p.subscribe(ctx, m, sub, sokagame.IsBoomTag(fields["CustomerType"]))
+	case "DeActivation":
+		err = m.deactivate(ctx, sub)
+	default:
+		err = p.interactive(ctx, m, sub, class)
 	}
 	if err != nil {
 		return err
@@ -148,50 +138,164 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	return tx.Commit()
 }
 
-// answer scores the reply against the current question now, as PHP does, and
-// charges for it; the points are credited only when the charge succeeds.
-func (p Processor) answer(ctx context.Context, tx *sql.Tx, sub subscription, interactionID, callbackID int64, msisdn, text, reference string, now time.Time) error {
+// interactive handles a customer's free-text MO. Keyword replies and
+// unsubscription apply in any state, as in PHP's checks before the
+// INACTIVE branch.
+func (p Processor) interactive(ctx context.Context, m *mo, sub *subscription, class sokagame.Class) error {
+	text := m.fields["CustomerResponse"]
+	if sub == nil {
+		// PHP creates the subscriber row here and invites them to send SOKA.
+		// Activation itself comes from the provider's Activation callback.
+		if _, err := m.createSubscription(ctx, "INACTIVE", "NORMAL", false, false); err != nil {
+			return err
+		}
+		if err := m.recordInteraction(ctx, "MO", text); err != nil {
+			return err
+		}
+		return m.message(ctx, sokagame.KindInactiveSub, sokagame.InactiveSub)
+	}
+	if err := m.recordInteraction(ctx, "MO", text); err != nil {
+		return err
+	}
+	switch class {
+	case sokagame.Help:
+		return m.message(ctx, sokagame.KindHelp, sokagame.HelpMsg)
+	case sokagame.OndoaInfo:
+		return m.message(ctx, sokagame.KindOndoa, sokagame.OndoaMsg)
+	case sokagame.Points:
+		balance, err := m.balance(ctx)
+		if err != nil {
+			return err
+		}
+		return m.message(ctx, sokagame.KindPoints, sokagame.PointsMessage(balance, m.msisdn))
+	case sokagame.Unsubscribe:
+		return m.unsubscribe(ctx, sub)
+	}
+	if sub.state != "ACTIVE" {
+		if sokagame.IsReactivation(text) {
+			return p.reactivate(ctx, m, sub)
+		}
+		return m.message(ctx, sokagame.KindInactiveSub, sokagame.InactiveSub)
+	}
+	switch class {
+	case sokagame.PurchaseMenu:
+		return m.message(ctx, "POINT_PURCHASE_MENU", purchaseMenu)
+	case sokagame.Purchase:
+		if sub.segment == "UNVERIFIED" {
+			return fmt.Errorf("%w: billing segment unverified", ErrNeedsReview)
+		}
+		amount, _ := sokagame.PurchaseAmount(text)
+		_, err := m.charge(ctx, *sub, "PU"+strconv.FormatInt(m.callbackID, 10)+m.msisdn, "POINT_PURCHASE", amount, offerFor(sub.segment))
+		return err
+	}
+	if sub.boomCredits > 0 || sub.freeCredits > 0 {
+		return p.freeAnswer(ctx, m, *sub, text)
+	}
+	if sub.segment == "UNVERIFIED" {
+		return fmt.Errorf("%w: billing segment unverified", ErrNeedsReview)
+	}
+	return p.answer(ctx, m, *sub, text)
+}
+
+// score looks up the current question and scores the answer at arrival time.
+func (p Processor) score(ctx context.Context, m *mo, sub subscription, text string, withBonus bool) (string, int64, error) {
 	if !sub.questionID.Valid {
-		return fmt.Errorf("%w: subscriber has no current question", ErrNeedsReview)
+		return "", 0, fmt.Errorf("%w: subscriber has no current question", ErrNeedsReview)
 	}
 	var answerKey sql.NullString
 	var questionPoints int64
-	if err := tx.QueryRowContext(ctx, `SELECT answer_key, points FROM questions WHERE id=? AND product_id=?`, sub.questionID.Int64, sub.productID).
+	if err := m.tx.QueryRowContext(ctx, `SELECT answer_key, points FROM questions WHERE id=? AND product_id=?`, sub.questionID.Int64, sub.productID).
 		Scan(&answerKey, &questionPoints); err != nil {
-		return err
+		return "", 0, err
 	}
 	var bonus int64
-	err := tx.QueryRowContext(ctx, `SELECT bonus_points FROM answer_level_bonuses WHERE product_id=? AND bonus_date=? AND level=?`,
-		sub.productID, sokagame.DarDate(now), sub.level+1).Scan(&bonus)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	if withBonus {
+		err := m.tx.QueryRowContext(ctx, `SELECT bonus_points FROM answer_level_bonuses WHERE product_id=? AND bonus_date=? AND level=?`,
+			sub.productID, sokagame.DarDate(m.now), sub.level+1).Scan(&bonus)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", 0, err
+		}
 	}
-	result, points := sokagame.Score(text, answerKey.String, questionPoints, sokagame.IsGoldenHour(now), bonus)
-	answerResult, err := tx.ExecContext(ctx, `INSERT INTO answers
+	result, points := sokagame.Score(text, answerKey.String, questionPoints, sokagame.IsGoldenHour(m.now), bonus)
+	return result, points, nil
+}
+
+func (m *mo) insertAnswer(ctx context.Context, sub subscription, text, result string, points int64) (int64, error) {
+	res, err := m.tx.ExecContext(ctx, `INSERT INTO answers
 		(interaction_id, question_id, product_id, subscriber_id, answer_text, result, answered_at, points_on_success)
-		VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), ?)`, interactionID, sub.questionID.Int64, sub.productID, sub.subscriberID, text, result, points)
+		VALUES (?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(6), ?)`, m.interactionID, sub.questionID.Int64, sub.productID, sub.subscriberID, text, result, points)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+// answer scores the reply against the current question now, as PHP does, and
+// charges for it; the points are credited only when the charge succeeds.
+func (p Processor) answer(ctx context.Context, m *mo, sub subscription, text string) error {
+	result, points, err := p.score(ctx, m, sub, text, true)
 	if err != nil {
 		return err
 	}
-	answerID, err := answerResult.LastInsertId()
+	answerID, err := m.insertAnswer(ctx, sub, text, result, points)
 	if err != nil {
 		return err
 	}
-	attemptID, err := charge(ctx, tx, sub, interactionID, callbackID, strconv.FormatInt(callbackID, 10)+msisdn, "ANSWER_CHARGE", sokagame.AnswerCharge, offerFor(sub.segment), reference)
+	attemptID, err := m.charge(ctx, sub, strconv.FormatInt(m.callbackID, 10)+m.msisdn, "ANSWER_CHARGE", sokagame.AnswerCharge, offerFor(sub.segment))
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE answers SET payment_attempt_id=? WHERE id=?`, attemptID, answerID)
+	_, err = m.tx.ExecContext(ctx, `UPDATE answers SET payment_attempt_id=? WHERE id=?`, attemptID, answerID)
 	return err
+}
+
+// freeAnswer spends a BOOM credit first, then a normal credit. The answer is
+// credited at once, without a level bonus or level change, and the next
+// question follows. PHP also sends a zero-amount BOOM usage charge to the
+// provider; that is not ported. Unlike PHP, spending a BOOM credit does not
+// also reduce the normal credit.
+func (p Processor) freeAnswer(ctx context.Context, m *mo, sub subscription, text string) error {
+	result, points, err := p.score(ctx, m, sub, text, false)
+	if err != nil {
+		return err
+	}
+	answerID, err := m.insertAnswer(ctx, sub, text, result, points)
+	if err != nil {
+		return err
+	}
+	if err := lockSubscriber(ctx, m.tx, sub.subscriberID); err != nil {
+		return err
+	}
+	if _, err := m.tx.ExecContext(ctx, `INSERT INTO point_ledger
+		(product_id, subscriber_id, answer_id, delta_points, reason, source_event_key, occurred_at)
+		VALUES (?, ?, ?, ?, 'FREE_ANSWER', ?, UTC_TIMESTAMP(6))`, sub.productID, sub.subscriberID, answerID, points, "soka-answer:"+strconv.FormatInt(answerID, 10)); err != nil {
+		return err
+	}
+	column, remaining := "boom_credits", sub.boomCredits-1
+	if sub.boomCredits == 0 {
+		column, remaining = "free_credits", sub.freeCredits-1
+	}
+	next, question, err := nextQuestion(ctx, m.tx, sub.productID)
+	if err != nil {
+		return err
+	}
+	if _, err := m.tx.ExecContext(ctx, `UPDATE product_subscriptions SET `+column+`=`+column+`-1, current_question_id=COALESCE(?, current_question_id) WHERE id=?`, next, sub.id); err != nil {
+		return err
+	}
+	total, err := m.balance(ctx)
+	if err != nil {
+		return err
+	}
+	return m.message(ctx, sokagame.KindQuestion, sokagame.CreditQuestion(total, remaining, question))
 }
 
 // charge records a pending payment attempt and the intent the guarded
 // dispatcher submits.
-func charge(ctx context.Context, tx *sql.Tx, sub subscription, interactionID, callbackID int64, requestID, kind string, amount int64, offer, reference string) (int64, error) {
-	result, err := tx.ExecContext(ctx, `INSERT INTO payment_attempts
+func (m *mo) charge(ctx context.Context, sub subscription, requestID, kind string, amount int64, offer string) (int64, error) {
+	result, err := m.tx.ExecContext(ctx, `INSERT INTO payment_attempts
 		(product_id, subscriber_id, interaction_id, external_request_id, payment_kind, channel, amount_minor, currency, state, requested_at)
 		VALUES (?, ?, ?, ?, ?, 'SMS', ?, 'TZS', 'PENDING', UTC_TIMESTAMP(6))`,
-		sub.productID, sub.subscriberID, interactionID, requestID, kind, amount)
+		sub.productID, sub.subscriberID, m.interactionID, requestID, kind, amount)
 	if err != nil {
 		return 0, err
 	}
@@ -199,8 +303,8 @@ func charge(ctx context.Context, tx *sql.Tx, sub subscription, interactionID, ca
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO charge_intents (payment_attempt_id, source_callback_event_id, offer_code, reference_id)
-		VALUES (?, ?, ?, ?)`, attemptID, callbackID, offer, nullable(reference))
+	_, err = m.tx.ExecContext(ctx, `INSERT INTO charge_intents (payment_attempt_id, source_callback_event_id, offer_code, reference_id)
+		VALUES (?, ?, ?, ?)`, attemptID, m.callbackID, offer, nullable(m.fields["TransactionId"]))
 	return attemptID, err
 }
 
@@ -215,8 +319,8 @@ func namedValues(payload []byte) (map[string]string, error) {
 	var envelope struct {
 		RequestParam struct {
 			Data []struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
+				Name  string          `json:"name"`
+				Value json.RawMessage `json:"value"`
 			} `json:"data"`
 		} `json:"requestParam"`
 	}
@@ -225,7 +329,11 @@ func namedValues(payload []byte) (map[string]string, error) {
 	}
 	fields := make(map[string]string, len(envelope.RequestParam.Data))
 	for _, item := range envelope.RequestParam.Data {
-		fields[item.Name] = item.Value
+		var value string
+		if err := json.Unmarshal(item.Value, &value); err != nil {
+			value = string(item.Value)
+		}
+		fields[item.Name] = value
 	}
 	return fields, nil
 }
