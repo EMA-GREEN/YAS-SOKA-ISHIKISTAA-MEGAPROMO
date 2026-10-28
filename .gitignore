@@ -1,0 +1,9 @@
+.history/
+.env
+.env.*
+!.env.example
+*.log
+coverage.out
+bin/
+*.sql.gz
+*.dump
