@@ -15,6 +15,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"yas-modernization/internal/tigoauth"
 )
 
 type Config struct {
@@ -25,6 +27,8 @@ type Config struct {
 	BearerToken   string
 	SourceAddress string
 	Client        *http.Client
+	// Tokens supplies the bearer token; nil means the fixed BearerToken.
+	Tokens tigoauth.Source
 }
 
 type Dispatcher struct {
@@ -42,10 +46,20 @@ func (c Config) validate() error {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && isLoopback(u.Hostname()))) {
 		return errors.New("charge endpoint must use HTTPS or loopback HTTP for tests")
 	}
-	if c.CPID == "" || c.Password == "" || c.Username == "" || c.BearerToken == "" || c.SourceAddress == "" {
+	if c.CPID == "" || c.Password == "" || c.Username == "" || c.SourceAddress == "" {
 		return errors.New("charge provider configuration is incomplete")
 	}
+	if c.Tokens == nil && c.BearerToken == "" {
+		return errors.New("no API token configured")
+	}
 	return nil
+}
+
+func (c Config) tokens() tigoauth.Source {
+	if c.Tokens != nil {
+		return c.Tokens
+	}
+	return tigoauth.Static(c.BearerToken)
 }
 
 func isLoopback(host string) bool {
@@ -62,11 +76,16 @@ func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 	if err := d.Config.validate(); err != nil {
 		return false, err
 	}
+	// Get the token first, so a failed login never leaves a claimed item.
+	token, err := d.Config.tokens().Token(ctx)
+	if err != nil {
+		return false, err
+	}
 	item, err := d.claim(ctx)
 	if err != nil || item == nil {
 		return false, err
 	}
-	status, sendErr := d.send(ctx, *item)
+	status, sendErr := d.send(ctx, *item, token)
 	state, reason := "SUBMITTED", ""
 	if sendErr != nil || status < 200 || status >= 300 {
 		state, reason = "NEEDS_REVIEW", "provider result uncertain"
@@ -121,7 +140,7 @@ func (d Dispatcher) claim(ctx context.Context) (*intent, error) {
 	return &item, nil
 }
 
-func (d Dispatcher) send(ctx context.Context, item intent) (int, error) {
+func (d Dispatcher) send(ctx context.Context, item intent, token string) (int, error) {
 	location, err := time.LoadLocation("Africa/Dar_es_Salaam")
 	if err != nil {
 		return 0, err
@@ -155,7 +174,7 @@ func (d Dispatcher) send(ctx context.Context, item intent) (int, error) {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+d.Config.BearerToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 	client := d.Config.Client
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("charge redirect refused") }}

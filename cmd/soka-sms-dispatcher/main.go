@@ -11,6 +11,7 @@ import (
 	"yas-modernization/internal/obs"
 	"yas-modernization/internal/smsdispatch"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/tigoauth"
 )
 
 func main() {
@@ -36,10 +37,15 @@ func main() {
 		log.Error("connected database mismatch")
 		os.Exit(1)
 	}
+	tokens, err := tigoauth.FromEnv(os.Getenv, "SMS_BEARER_TOKEN")
+	if err != nil {
+		log.Error("API token configuration invalid", "error", err)
+		os.Exit(1)
+	}
 	dispatcher := smsdispatch.Dispatcher{DB: store.DB, Config: smsdispatch.Config{
 		Endpoint: os.Getenv("SMS_ENDPOINT"), CPID: os.Getenv("SMS_CP_ID"),
 		Password: os.Getenv("SMS_PASSWORD"), Username: os.Getenv("SMS_USERNAME"),
-		BearerToken: os.Getenv("SMS_BEARER_TOKEN"), SourceAddress: os.Getenv("SMS_SOURCE_ADDRESS"),
+		Tokens: tokens, SourceAddress: os.Getenv("SMS_SOURCE_ADDRESS"),
 	}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

@@ -43,6 +43,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - SMS resend after an explicit provider refusal, once, same day, with a new request ID (migration 011), replacing `sms_reprocess`.
 
+- Tigo API login token client (`internal/tigoauth`), used by the charge, SMS and activation dispatchers before they claim work. Findings: Soka renewal content and Android payments are not live in the PHP code.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

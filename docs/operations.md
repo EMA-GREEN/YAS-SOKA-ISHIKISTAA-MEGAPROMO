@@ -41,6 +41,16 @@ Suggested first alerts:
 - any `NEEDS_REVIEW` charge or message, or any `uncertain` dispatch;
 - a missing scrape.
 
+## Tigo API token
+
+The charge, SMS and activation dispatchers need a bearer token. PHP's `UserAccessToken.php` logs in to `/api/auth/login`, assumes the token lasts 10 days, and writes it into every product database for the workers to read.
+
+In Go each dispatcher gets its token itself (`internal/tigoauth`):
+- **Login mode:** with `TIGO_LOGIN_URL` (HTTPS), `TIGO_LOGIN_USERNAME` and `TIGO_LOGIN_PASSWORD` set, it logs in and keeps the token in memory. It logs in again after `TIGO_TOKEN_TTL` (default `24h`, at most `240h`).
+- **Fixed-token mode:** without `TIGO_LOGIN_URL`, it uses the fixed `CHARGE_BEARER_TOKEN`, `SMS_BEARER_TOKEN` or `ACTIVATION_ACCESS_TOKEN`.
+
+The token is fetched before any work is claimed, so a failed login never leaves a charge, SMS or activation half-sent. The real token lifetime and whether the endpoint rejects early re-login are not confirmed.
+
 ## Deployment
 
 `deploy/yas.env.example` lists every variable with placeholders. `deploy/systemd/yas@.service` is a hardened template unit for each binary, using `yas@callbacks`, `yas@outbox-relay` and so on. It restarts on failure and stops with SIGTERM, which the crash-recovery test shows is safe at any point. The real host topology is still unknown, so these files are a starting point. They have not been validated on a target host.

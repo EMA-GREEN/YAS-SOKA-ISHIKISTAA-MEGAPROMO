@@ -96,7 +96,11 @@ These are reports and email (`*Report*`, `Revenue*`, `MailerScript`, `*Analysis*
 3. **Messages can be lost.** None of the 40 publishers sets persistent delivery or uses publisher confirms, and they mark rows as sent after an unconfirmed publish. A broker restart or crash can drop billing and MO events. The Go outbox uses persistent messages, confirms, a lease and dead letters, and the crash test covers this.
 4. **TLS verification is disabled** (`CURLOPT_SSL_VERIFYPEER false`) in 9 files that call providers. Go adapters require HTTPS with verification.
 5. **Daily tables** are chosen by `date("Ymd")` at request time, so a callback received just after midnight lands in the next day's table. The Go inbox has no date-named tables.
-6. **Credentials are hardcoded:** the Tigo Payment CP password (`SokaLib.php`) and the RabbitMQ `trivia_manage` password (in the consumers) are in plain text. Treat both as compromised and rotate them. The payment endpoint is plain HTTP on a private address, which the Go dispatcher refuses until a transport decision is made.
+6. **Credentials are hardcoded:** these are in plain text and must be treated as compromised and rotated:
+   - the Tigo Payment CP password (`SokaLib.php`);
+   - the Tigo API login (`UserAccessToken.php`);
+   - the RabbitMQ `trivia_manage` password (in the consumers);
+   - the MySQL `api_user` password, which `UserAccessToken.php` uses to write the token into five product databases. The payment endpoint is plain HTTP on a private address, which the Go dispatcher refuses until a transport decision is made.
 7. In `SokaMoConsumer.php`, the `INACTIVE` block (lines 585–1037) contains an unreachable older copy of the answer flow. Using a BOOM credit also decrements normal `CREDIT`. Error and timeout paths send a new question without updating `LAST_QN_ID`. See `docs/soka-answer-flow.md`.
 8. A `tigopesa` collection path writes to a `*_test` database, and copies of the Soka M-Push publisher and consumer sit in the Ishikistaa folder.
 
@@ -125,3 +129,12 @@ Rows marked *Pending* in sections 1–4 have no Go test yet. Each needs its own 
 | `tigopesa/collection` (XML) | Writes to `tigo_megapromo_test`. Looks up the subscriber with an undefined variable (`$moble`), so it always takes the new-subscriber path. Replies with malformed XML and `RESULT TS` regardless of errors. | Not served (404). | The owner must confirm whether any provider calls it. If so, its real contract needs a redacted sample. |
 
 These defects were found in the legacy push callback and are fixed by design in Go: a new subscriber's `subscriber_details` row was written from the wrong, empty array, and the Kannel SMS URL embedded gateway credentials.
+
+## 8. Findings from the Soka renewal and Android paths
+
+- **Renewal content is probably not live in this code.** The gateway writes Soka renewal payment callbacks (request IDs containing `W`, `RW` or `w`) to `tbl_payment_soka_renewal_notifications_YYYYMMDD`. `SokaNewRenewalPublisher.php` reads `tbl_payment_renewal_notifications_YYYYMMDD`, a different table, and is in no check script. Its consumer would grant one free credit and send "KETE 1" for daytime renewals, deactivate subscribers the renewal system reports as not active, and update the renewal system's own middleware tables in `tigo_renewals_db`.
+  - Go does not port it. Granting credits that PHP may not grant would give away free answers.
+  - The middleware tables belong to the separate renewal system (YAS-RENEWALS).
+  - Renewal callbacks stay in the Go `callback_events` inbox, so they can be replayed once the owner confirms what runs in production.
+- **Android payments are dropped by the PHP gateway.** A payment whose request ID contains `A` is labeled `ANDROID` but never assigned a target table, so the insert cannot succeed. No Android consumer exists. Nothing to port without the Android app's contract.
+- **The access-token refresh is ported** as `internal/tigoauth` (`docs/operations.md`).

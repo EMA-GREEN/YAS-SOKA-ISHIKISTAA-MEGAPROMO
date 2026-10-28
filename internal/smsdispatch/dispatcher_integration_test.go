@@ -12,10 +12,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	driver "github.com/go-sql-driver/mysql"
 	mysqlstore "yas-modernization/internal/store/mysql"
 	"yas-modernization/internal/testdb"
+	"yas-modernization/internal/tigoauth"
 )
 
 func TestConfigRejectsRemotePlainHTTP(t *testing.T) {
@@ -206,6 +208,34 @@ func TestDispatchIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustState(fifth, "REJECTED")
+	// A login-backed token is used, and a failed login claims nothing.
+	var authHeader string
+	login := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/broken" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"logged-in-token"}`))
+	}))
+	defer login.Close()
+	answers = []string{`{"responseParam":{"status":"0"}}`}
+	capture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"responseParam":{"status":"0"}}`))
+	}))
+	defer capture.Close()
+	d.Config.Endpoint = capture.URL
+	d.Config.Tokens = &tigoauth.Client{URL: login.URL + "/broken", Username: "u", Password: "test-only", TTL: time.Hour}
+	sixth := seed("Synthetic token message")
+	if worked, err := d.DispatchOne(ctx); err == nil || worked {
+		t.Fatalf("failed login worked=%v err=%v", worked, err)
+	}
+	mustState(sixth, "PENDING")
+	d.Config.Tokens = &tigoauth.Client{URL: login.URL + "/login", Username: "u", Password: "test-only", TTL: time.Hour}
+	if worked, err := d.DispatchOne(ctx); err != nil || !worked || authHeader != "Bearer logged-in-token" {
+		t.Fatalf("login token worked=%v err=%v header=%q", worked, err, authHeader)
+	}
+	mustState(sixth, "ACCEPTED")
 	var resendEvents int64
 	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM outbound_message_events WHERE event_kind='REJECTED_RETRY'`).Scan(&resendEvents); err != nil || resendEvents != 2 {
 		t.Fatalf("resend events=%d err=%v", resendEvents, err)

@@ -11,6 +11,7 @@ import (
 	"yas-modernization/internal/activationdispatch"
 	"yas-modernization/internal/obs"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/tigoauth"
 )
 
 func main() {
@@ -36,10 +37,15 @@ func main() {
 		log.Error("connected database mismatch")
 		os.Exit(1)
 	}
+	tokens, err := tigoauth.FromEnv(os.Getenv, "ACTIVATION_ACCESS_TOKEN")
+	if err != nil {
+		log.Error("API token configuration invalid", "error", err)
+		os.Exit(1)
+	}
 	dispatcher := activationdispatch.Dispatcher{DB: store.DB, Config: activationdispatch.Config{
 		Endpoint: os.Getenv("ACTIVATION_ENDPOINT"), CPID: os.Getenv("ACTIVATION_CP_ID"),
 		Password: os.Getenv("ACTIVATION_PASSWORD"), Username: os.Getenv("ACTIVATION_USERNAME"),
-		AccessToken: os.Getenv("ACTIVATION_ACCESS_TOKEN"), SourceAddress: os.Getenv("ACTIVATION_SOURCE_ADDRESS"),
+		Tokens: tokens, SourceAddress: os.Getenv("ACTIVATION_SOURCE_ADDRESS"),
 	}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

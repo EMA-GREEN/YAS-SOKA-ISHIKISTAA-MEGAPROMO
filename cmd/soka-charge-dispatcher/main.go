@@ -11,6 +11,7 @@ import (
 	"yas-modernization/internal/chargedispatch"
 	"yas-modernization/internal/obs"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/tigoauth"
 )
 
 func main() {
@@ -36,10 +37,15 @@ func main() {
 		log.Error("connected database mismatch")
 		os.Exit(1)
 	}
+	tokens, err := tigoauth.FromEnv(os.Getenv, "CHARGE_BEARER_TOKEN")
+	if err != nil {
+		log.Error("API token configuration invalid", "error", err)
+		os.Exit(1)
+	}
 	dispatcher := chargedispatch.Dispatcher{DB: store.DB, Config: chargedispatch.Config{
 		Endpoint: os.Getenv("CHARGE_ENDPOINT"), CPID: os.Getenv("CHARGE_CP_ID"),
 		Password: os.Getenv("CHARGE_PASSWORD"), Username: os.Getenv("CHARGE_USERNAME"),
-		BearerToken: os.Getenv("CHARGE_BEARER_TOKEN"), SourceAddress: os.Getenv("CHARGE_SOURCE_ADDRESS"),
+		Tokens: tokens, SourceAddress: os.Getenv("CHARGE_SOURCE_ADDRESS"),
 	}}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

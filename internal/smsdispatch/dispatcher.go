@@ -16,11 +16,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"yas-modernization/internal/tigoauth"
 )
 
 type Config struct {
 	Endpoint, CPID, Password, Username, BearerToken, SourceAddress string
 	Client                                                         *http.Client
+	// Tokens supplies the bearer token; nil means the fixed BearerToken.
+	Tokens tigoauth.Source
 }
 
 type Dispatcher struct {
@@ -56,10 +60,20 @@ func (c Config) validate() error {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
 		return errors.New("SMS endpoint must use HTTPS or loopback HTTP for tests")
 	}
-	if c.CPID == "" || c.Password == "" || c.Username == "" || c.BearerToken == "" || c.SourceAddress == "" {
+	if c.CPID == "" || c.Password == "" || c.Username == "" || c.SourceAddress == "" {
 		return errors.New("SMS provider configuration is incomplete")
 	}
+	if c.Tokens == nil && c.BearerToken == "" {
+		return errors.New("no API token configured")
+	}
 	return nil
+}
+
+func (c Config) tokens() tigoauth.Source {
+	if c.Tokens != nil {
+		return c.Tokens
+	}
+	return tigoauth.Static(c.BearerToken)
 }
 
 func loopback(host string) bool {
@@ -74,11 +88,16 @@ func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 	if err := d.Config.validate(); err != nil {
 		return false, err
 	}
+	// Get the token first, so a failed login never leaves a claimed item.
+	token, err := d.Config.tokens().Token(ctx)
+	if err != nil {
+		return false, err
+	}
 	item, err := d.claim(ctx)
 	if err != nil || item == nil {
 		return false, err
 	}
-	status, result, sendErr := d.send(ctx, *item)
+	status, result, sendErr := d.send(ctx, *item, token)
 	state, eventKind := "NEEDS_REVIEW", "NEEDS_REVIEW"
 	var next any
 	switch {
@@ -163,7 +182,7 @@ func sameDarDay(a, b time.Time) bool {
 	return a.In(loc).Format("2006-01-02") == b.In(loc).Format("2006-01-02")
 }
 
-func (d Dispatcher) send(ctx context.Context, item message) (string, outcome, error) {
+func (d Dispatcher) send(ctx context.Context, item message, token string) (string, outcome, error) {
 	location, err := time.LoadLocation("Africa/Dar_es_Salaam")
 	if err != nil {
 		return "", uncertain, err
@@ -190,7 +209,7 @@ func (d Dispatcher) send(ctx context.Context, item message) (string, outcome, er
 		return "", uncertain, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+d.Config.BearerToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 	client := d.Config.Client
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("SMS redirect refused") }}

@@ -17,6 +17,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"yas-modernization/internal/tigoauth"
 )
 
 // OfferCode is the activation offer in PHP.
@@ -25,6 +27,8 @@ const OfferCode = "017008600010"
 type Config struct {
 	Endpoint, CPID, Password, Username, AccessToken, SourceAddress string
 	Client                                                         *http.Client
+	// Tokens supplies the bearer token; nil means the fixed AccessToken.
+	Tokens tigoauth.Source
 }
 
 type Dispatcher struct {
@@ -42,10 +46,20 @@ func (c Config) validate() error {
 	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopback(u.Hostname()))) {
 		return errors.New("activation endpoint must use HTTPS or loopback HTTP for tests")
 	}
-	if c.CPID == "" || c.Password == "" || c.Username == "" || c.AccessToken == "" || c.SourceAddress == "" {
+	if c.CPID == "" || c.Password == "" || c.Username == "" || c.SourceAddress == "" {
 		return errors.New("activation provider configuration is incomplete")
 	}
+	if c.Tokens == nil && c.AccessToken == "" {
+		return errors.New("no API token configured")
+	}
 	return nil
+}
+
+func (c Config) tokens() tigoauth.Source {
+	if c.Tokens != nil {
+		return c.Tokens
+	}
+	return tigoauth.Static(c.AccessToken)
 }
 
 func loopback(host string) bool {
@@ -61,11 +75,16 @@ func (d Dispatcher) DispatchOne(ctx context.Context) (bool, error) {
 	if err := d.Config.validate(); err != nil {
 		return false, err
 	}
+	// Get the token first, so a failed login never leaves a claimed item.
+	token, err := d.Config.tokens().Token(ctx)
+	if err != nil {
+		return false, err
+	}
 	item, err := d.claim(ctx)
 	if err != nil || item == nil {
 		return false, err
 	}
-	httpStatus, providerStatus, accepted, sendErr := d.send(ctx, *item)
+	httpStatus, providerStatus, accepted, sendErr := d.send(ctx, *item, token)
 	state, reason := "SENT", ""
 	if sendErr != nil || !accepted {
 		state, reason = "NEEDS_REVIEW", "activation result uncertain"
@@ -118,7 +137,7 @@ func (d Dispatcher) claim(ctx context.Context) (*attempt, error) {
 	return &item, nil
 }
 
-func (d Dispatcher) send(ctx context.Context, item attempt) (int, string, bool, error) {
+func (d Dispatcher) send(ctx context.Context, item attempt, token string) (int, string, bool, error) {
 	location, err := time.LoadLocation("Africa/Dar_es_Salaam")
 	if err != nil {
 		return 0, "", false, err
@@ -145,7 +164,7 @@ func (d Dispatcher) send(ctx context.Context, item attempt) (int, string, bool, 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	// PHP sends the token in X-Authorization, not Authorization.
-	req.Header.Set("X-Authorization", "Bearer "+d.Config.AccessToken)
+	req.Header.Set("X-Authorization", "Bearer "+token)
 	client := d.Config.Client
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("activation redirect refused") }}
