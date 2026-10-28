@@ -29,7 +29,7 @@ With both an allowlist and a token, both must pass. `enforce` and `report` need 
   - dispatchers: `yas_charge_intents{state}` and `yas_outbound_messages{state}` for the open and review states only (terminal states grow without bound), and `yas_dispatch_attempts_total{dispatcher,result}` with results `ok`, `uncertain` (claimed, needs manual review) and `failed_before_claim`
 - Gauges read from the database at scrape time are omitted when the read fails, so alerts see missing data rather than a false zero.
 - Label values come only from fixed sets in code, never from request input. The relay's `kind` label is limited to the event types seen in the PHP controllers, and anything else is counted as `other`.
-- Queue depth and consumer counts come from RabbitMQ's own `rabbitmq_prometheus` plugin rather than these processes.
+- Queue depth and consumer counts come from RabbitMQ's own `rabbitmq_prometheus` plugin rather than these processes. Watch the `yas.*.pending` holding queues: they keep callback kinds whose workers do not exist yet and have no consumer.
 
 Suggested first alerts:
 - oldest pending outbox row older than 2 minutes;

@@ -96,7 +96,7 @@ func (d Dispatcher) claim(ctx context.Context) (*intent, error) {
 		s.msisdn, COALESCE(ci.reference_id,''), pa.currency, pa.state
 		FROM charge_intents ci JOIN payment_attempts pa ON pa.id=ci.payment_attempt_id
 		JOIN products p ON p.id=pa.product_id JOIN subscribers s ON s.id=pa.subscriber_id
-		WHERE ci.state='PENDING' AND p.code='soka' AND pa.payment_kind='POINT_PURCHASE'
+		WHERE ci.state='PENDING' AND p.code='soka' AND pa.payment_kind IN ('POINT_PURCHASE','ANSWER_CHARGE')
 		ORDER BY ci.id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&item.id, &item.paymentID, &item.amount,
 		&item.offer, &item.requestID, &item.msisdn, &item.reference, &item.currency, &item.paymentState)
 	if errors.Is(err, sql.ErrNoRows) {

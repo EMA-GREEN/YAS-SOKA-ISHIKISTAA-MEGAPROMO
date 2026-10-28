@@ -8,12 +8,14 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"yas-modernization/internal/callbacks"
+	"yas-modernization/internal/workers/sokagame"
 )
 
-var ErrNotApplicable = errors.New("callback is not a Soka point purchase")
-var ErrInvalid = errors.New("point purchase cannot be reconciled")
+var ErrNotApplicable = errors.New("callback is not a Soka payment this worker handles")
+var ErrInvalid = errors.New("Soka payment cannot be reconciled")
 
 // Tiers come from YAS-SOKA/config.php POINT_PURCHASE_MAP. Amounts are whole TZS.
 var pointsForTZS = map[int64]int64{300: 300, 500: 600, 1000: 1500, 2000: 2500, 5000: 10000}
@@ -22,10 +24,22 @@ const purchaseMessage = "Hongera! Umefanikiwa kununua POINT %point,salio la poin
 const lowBalanceMessage = "Ndugu Mteja hujafanikiwa kununua Point, tafadhali angalia salio lako na ujaribu tena. Usipoteze nafasi ya Ushindi wa hadi Tsh.5,000,000!"
 const errorMessage = "Ndugu Mteja, Tafadhali tuma jibu lako tena. Asante."
 
-type Processor struct{ DB *sql.DB }
+type Processor struct {
+	DB *sql.DB
+	// Now decides dated level bonuses; nil means time.Now.
+	Now func() time.Time
+}
 
-// Process commits the payment outcome, point award, customer message intent, and
-// replay marker together. It never calls a charging or SMS provider.
+// result is a validated payment callback matched to its pending attempt.
+type result struct {
+	callbackID, attemptID, productID, subscriberID, amount int64
+	requestID, msisdn, status, billingSystem               string
+	fields                                                 map[string]string
+}
+
+// Process settles a Soka point-purchase or answer charge. The outcome, any
+// points, any follow-up charge intent, message intents, and the replay marker
+// commit together. It never calls a charging or SMS provider.
 func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if callbackID <= 0 {
 		return fmt.Errorf("%w: callback ID", ErrInvalid)
@@ -45,8 +59,15 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	if product != "soka" || kind != "Payment" || !strings.Contains(requestID, "PU") {
+	if product != "soka" || kind != "Payment" {
 		return ErrNotApplicable
+	}
+	// PHP routes PU request IDs to the purchase branch; other Soka payments are
+	// answer charges only when Go created the attempt.
+	purchase := strings.Contains(requestID, "PU")
+	paymentKind := "ANSWER_CHARGE"
+	if purchase {
+		paymentKind = "POINT_PURCHASE"
 	}
 	var processed int
 	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-purchase' AND callback_event_id=?`, callbackID).Scan(&processed)
@@ -56,6 +77,21 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
+	r := result{callbackID: callbackID, requestID: requestID, msisdn: msisdn}
+	var currency, state, storedKind, subscriberMSISDN string
+	err = tx.QueryRowContext(ctx, `SELECT pa.id, pa.product_id, pa.subscriber_id, pa.amount_minor, pa.currency, pa.state, pa.payment_kind, s.msisdn
+		FROM payment_attempts pa JOIN products p ON p.id=pa.product_id JOIN subscribers s ON s.id=pa.subscriber_id
+		WHERE p.code='soka' AND pa.external_request_id=? FOR UPDATE`, requestID).
+		Scan(&r.attemptID, &r.productID, &r.subscriberID, &r.amount, &currency, &state, &storedKind, &subscriberMSISDN)
+	if !purchase && (errors.Is(err, sql.ErrNoRows) || (err == nil && storedKind != paymentKind)) {
+		return ErrNotApplicable
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: pending payment not found", ErrInvalid)
+	}
+	if err != nil {
+		return err
+	}
 	event, err := callbacks.ParseJSON(product, payload)
 	if err != nil || event.RequestID != requestID || event.MSISDN != msisdn {
 		return fmt.Errorf("%w: callback identity", ErrInvalid)
@@ -63,6 +99,209 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if event.Payment.Status == "UNKNOWN" {
 		return fmt.Errorf("%w: unknown payment status", ErrInvalid)
 	}
+	if r.fields, err = namedValues(payload); err != nil {
+		return fmt.Errorf("%w: payload", ErrInvalid)
+	}
+	if subscriberMSISDN != msisdn || currency != "TZS" || storedKind != paymentKind || state != "PENDING" {
+		return fmt.Errorf("%w: payment identity or state", ErrInvalid)
+	}
+	var points int64
+	if purchase {
+		var knownTier bool
+		if points, knownTier = pointsForTZS[r.amount]; !knownTier {
+			return fmt.Errorf("%w: unknown purchase tier", ErrInvalid)
+		}
+	}
+	r.status, r.billingSystem = event.Payment.Status, r.fields["billingSystem"]
+	if r.status == "SUCCESS" {
+		charged, err := strconv.ParseInt(strings.TrimSpace(r.fields["ChargeAmount"]), 10, 64)
+		if err != nil || charged != r.amount {
+			return fmt.Errorf("%w: charge amount mismatch", ErrInvalid)
+		}
+		if strings.TrimSpace(r.fields["BillingId"]) == "" {
+			return fmt.Errorf("%w: missing billing ID", ErrInvalid)
+		}
+	} else if reason := strings.ToLower(r.fields["Reason"]); strings.Contains(reason, "low balance") || strings.Contains(reason, "insufficient balance") {
+		r.status = "LOW_BALANCE_FAILED"
+	} else {
+		r.status = "BILLING_ERROR"
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE payment_attempts SET state=?, provider_transaction_id=?, settled_at=UTC_TIMESTAMP(6) WHERE id=?`,
+		r.status, nullable(r.fields["BillingId"], r.status == "SUCCESS"), r.attemptID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO payment_events (payment_attempt_id, callback_event_id, event_kind, provider_status, occurred_at)
+		VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))`, r.attemptID, callbackID, r.status, event.Payment.Status); err != nil {
+		return err
+	}
+	if purchase {
+		err = p.settlePurchase(ctx, tx, r, points)
+	} else {
+		err = p.settleAnswer(ctx, tx, r)
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('soka-point-purchase', ?)`, callbackID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (p Processor) settlePurchase(ctx context.Context, tx *sql.Tx, r result, points int64) error {
+	message := errorMessage
+	if r.status == "SUCCESS" {
+		if err := lockSubscriber(ctx, tx, r.subscriberID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO point_ledger
+			(product_id, subscriber_id, payment_attempt_id, delta_points, reason, source_event_key, occurred_at)
+			VALUES (?, ?, ?, ?, 'POINT_PURCHASE', ?, UTC_TIMESTAMP(6))`, r.productID, r.subscriberID, r.attemptID, points, sourceKey(r.attemptID)); err != nil {
+			return err
+		}
+		// PHP raises USER_LEVEL on every successful purchase as well as answers.
+		if _, err := tx.ExecContext(ctx, `UPDATE product_subscriptions SET answer_level=answer_level+1 WHERE product_id=? AND subscriber_id=?`, r.productID, r.subscriberID); err != nil {
+			return err
+		}
+		balance, err := balance(ctx, tx, r)
+		if err != nil {
+			return err
+		}
+		message = strings.ReplaceAll(strings.ReplaceAll(purchaseMessage, "%point", strconv.FormatInt(points, 10)), "%totalpoints", strconv.FormatInt(balance, 10))
+	} else if r.status == "LOW_BALANCE_FAILED" {
+		message = lowBalanceMessage
+	}
+	return insertMessage(ctx, tx, r, "POINT_PURCHASE_RESULT", message, sourceKey(r.attemptID))
+}
+
+// settleAnswer follows the non-PU branches of SokaPaymentConsumers.php. Success
+// credits the points fixed when the answer arrived and sends the next question;
+// a low balance steps down the 99 → 45 → 30 fallback ladder; other failures ask
+// the customer to answer again. PHP's delayed retry rows are not ported.
+func (p Processor) settleAnswer(ctx context.Context, tx *sql.Tx, r result) error {
+	var answerID, points, interactionID int64
+	err := tx.QueryRowContext(ctx, `SELECT id, points_on_success, interaction_id FROM answers WHERE payment_attempt_id=? FOR UPDATE`, r.attemptID).
+		Scan(&answerID, &points, &interactionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: answer for charge not found", ErrInvalid)
+	}
+	if err != nil {
+		return err
+	}
+	answerKey := strconv.FormatInt(answerID, 10)
+	switch r.status {
+	case "SUCCESS":
+		if err := lockSubscriber(ctx, tx, r.subscriberID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO point_ledger
+			(product_id, subscriber_id, answer_id, payment_attempt_id, delta_points, reason, source_event_key, occurred_at)
+			VALUES (?, ?, ?, ?, ?, 'ANSWER', ?, UTC_TIMESTAMP(6))`, r.productID, r.subscriberID, answerID, r.attemptID, points, "soka-answer:"+answerKey); err != nil {
+			return err
+		}
+		var level int64
+		if err := tx.QueryRowContext(ctx, `SELECT answer_level FROM product_subscriptions WHERE product_id=? AND subscriber_id=? FOR UPDATE`,
+			r.productID, r.subscriberID).Scan(&level); err != nil {
+			return err
+		}
+		next, question, err := nextQuestion(ctx, tx, r.productID)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE product_subscriptions SET answer_level=answer_level+1, current_question_id=COALESCE(?, current_question_id)
+			WHERE product_id=? AND subscriber_id=?`, next, r.productID, r.subscriberID); err != nil {
+			return err
+		}
+		total, err := balance(ctx, tx, r)
+		if err != nil {
+			return err
+		}
+		body := strings.Replace(sokagame.PointAppend, "%s", strconv.FormatInt(total, 10), 1)
+		if next != nil {
+			body = sokagame.QuestionMessage(total, question)
+		}
+		if err := insertMessage(ctx, tx, r, sokagame.KindQuestion, body, "soka-answer-question:"+answerKey); err != nil {
+			return err
+		}
+		now := time.Now()
+		if p.Now != nil {
+			now = p.Now()
+		}
+		var reward sql.NullString
+		err = tx.QueryRowContext(ctx, `SELECT reward_message FROM answer_level_bonuses WHERE product_id=? AND bonus_date=? AND level=?`,
+			r.productID, sokagame.DarDate(now), level+1).Scan(&reward)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if strings.TrimSpace(reward.String) != "" {
+			return insertMessage(ctx, tx, r, sokagame.KindReward, reward.String, "soka-answer-reward:"+answerKey)
+		}
+		return nil
+	case "LOW_BALANCE_FAILED":
+		if amount, prefix, ok := sokagame.Fallback(r.amount, r.billingSystem); ok {
+			requestID := prefix + strconv.FormatInt(r.callbackID, 10) + r.msisdn
+			result, err := tx.ExecContext(ctx, `INSERT INTO payment_attempts
+				(product_id, subscriber_id, interaction_id, external_request_id, payment_kind, channel, amount_minor, currency, state, requested_at, fallback_of_attempt_id)
+				VALUES (?, ?, ?, ?, 'ANSWER_CHARGE', 'SMS', ?, 'TZS', 'PENDING', UTC_TIMESTAMP(6), ?)`,
+				r.productID, r.subscriberID, interactionID, requestID, amount, r.attemptID)
+			if err != nil {
+				return err
+			}
+			fallbackID, err := result.LastInsertId()
+			if err != nil {
+				return err
+			}
+			var reference sql.NullString
+			if err := tx.QueryRowContext(ctx, `SELECT reference_id FROM charge_intents WHERE payment_attempt_id=?`, r.attemptID).Scan(&reference); err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO charge_intents (payment_attempt_id, source_callback_event_id, offer_code, reference_id) VALUES (?, ?, ?, ?)`,
+				fallbackID, r.callbackID, sokagame.NormalOffer, reference); err != nil {
+				return err
+			}
+			_, err = tx.ExecContext(ctx, `UPDATE answers SET payment_attempt_id=? WHERE id=?`, fallbackID, answerID)
+			return err
+		}
+		return insertMessage(ctx, tx, r, sokagame.KindLowBalance, sokagame.LowBalance, sourceKey(r.attemptID))
+	default:
+		return insertMessage(ctx, tx, r, sokagame.KindError, sokagame.ErrorMsg, sourceKey(r.attemptID))
+	}
+}
+
+// nextQuestion picks a random current question, as PHP picks a random ID in
+// MIN_QN_ID..MAX_QN_ID. It returns nil when the product has none.
+func nextQuestion(ctx context.Context, tx *sql.Tx, productID int64) (any, string, error) {
+	var id int64
+	var text string
+	err := tx.QueryRowContext(ctx, `SELECT id, question_text FROM questions WHERE product_id=?
+		AND (valid_from IS NULL OR valid_from <= UTC_TIMESTAMP(6)) AND (valid_until IS NULL OR valid_until >= UTC_TIMESTAMP(6))
+		ORDER BY RAND() LIMIT 1`, productID).Scan(&id, &text)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, "", nil
+	}
+	return id, text, err
+}
+
+// lockSubscriber serializes balance calculation for concurrent payments.
+func lockSubscriber(ctx context.Context, tx *sql.Tx, subscriberID int64) error {
+	var msisdn string
+	return tx.QueryRowContext(ctx, `SELECT msisdn FROM subscribers WHERE id=? FOR UPDATE`, subscriberID).Scan(&msisdn)
+}
+
+func balance(ctx context.Context, tx *sql.Tx, r result) (int64, error) {
+	var total int64
+	err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(delta_points),0) FROM point_ledger WHERE product_id=? AND subscriber_id=?`, r.productID, r.subscriberID).Scan(&total)
+	return total, err
+}
+
+func insertMessage(ctx context.Context, tx *sql.Tx, r result, kind, body, key string) error {
+	_, err := tx.ExecContext(ctx, `INSERT INTO outbound_messages
+		(product_id, subscriber_id, message_kind, body_text, delivery_state, source_event_key)
+		VALUES (?, ?, ?, ?, 'PENDING', ?)`, r.productID, r.subscriberID, kind, body, key)
+	return err
+}
+
+func namedValues(payload []byte) (map[string]string, error) {
 	var envelope struct {
 		RequestParam struct {
 			Data []struct {
@@ -72,7 +311,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 		} `json:"requestParam"`
 	}
 	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return fmt.Errorf("%w: payload", ErrInvalid)
+		return nil, err
 	}
 	fields := make(map[string]string, len(envelope.RequestParam.Data))
 	for _, item := range envelope.RequestParam.Data {
@@ -82,76 +321,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 		}
 		fields[item.Name] = value
 	}
-	var attemptID, productID, subscriberID, amount int64
-	var currency, state, paymentKind, subscriberMSISDN string
-	err = tx.QueryRowContext(ctx, `SELECT pa.id, pa.product_id, pa.subscriber_id, pa.amount_minor, pa.currency, pa.state, pa.payment_kind, s.msisdn
-		FROM payment_attempts pa JOIN products p ON p.id=pa.product_id JOIN subscribers s ON s.id=pa.subscriber_id
-		WHERE p.code='soka' AND pa.external_request_id=? FOR UPDATE`, requestID).
-		Scan(&attemptID, &productID, &subscriberID, &amount, &currency, &state, &paymentKind, &subscriberMSISDN)
-	if errors.Is(err, sql.ErrNoRows) {
-		return fmt.Errorf("%w: pending payment not found", ErrInvalid)
-	}
-	if err != nil {
-		return err
-	}
-	if subscriberMSISDN != msisdn || currency != "TZS" || paymentKind != "POINT_PURCHASE" || state != "PENDING" {
-		return fmt.Errorf("%w: payment identity or state", ErrInvalid)
-	}
-	points, knownTier := pointsForTZS[amount]
-	if !knownTier {
-		return fmt.Errorf("%w: unknown purchase tier", ErrInvalid)
-	}
-	status := event.Payment.Status
-	if status == "SUCCESS" {
-		charged, err := strconv.ParseInt(strings.TrimSpace(fields["ChargeAmount"]), 10, 64)
-		if err != nil || charged != amount {
-			return fmt.Errorf("%w: charge amount mismatch", ErrInvalid)
-		}
-		if strings.TrimSpace(fields["BillingId"]) == "" {
-			return fmt.Errorf("%w: missing billing ID", ErrInvalid)
-		}
-	} else if strings.Contains(strings.ToLower(fields["Reason"]), "low balance") || strings.Contains(strings.ToLower(fields["Reason"]), "insufficient balance") {
-		status = "LOW_BALANCE_FAILED"
-	} else {
-		status = "BILLING_ERROR"
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE payment_attempts SET state=?, provider_transaction_id=?, settled_at=UTC_TIMESTAMP(6) WHERE id=?`,
-		status, nullable(fields["BillingId"], status == "SUCCESS"), attemptID); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO payment_events (payment_attempt_id, callback_event_id, event_kind, provider_status, occurred_at)
-		VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))`, attemptID, callbackID, status, event.Payment.Status); err != nil {
-		return err
-	}
-	message := errorMessage
-	if status == "SUCCESS" {
-		// Serialize balance calculation for concurrent purchases by this subscriber.
-		var lockedMSISDN string
-		if err := tx.QueryRowContext(ctx, `SELECT msisdn FROM subscribers WHERE id=? FOR UPDATE`, subscriberID).Scan(&lockedMSISDN); err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO point_ledger
-			(product_id, subscriber_id, payment_attempt_id, delta_points, reason, source_event_key, occurred_at)
-			VALUES (?, ?, ?, ?, 'POINT_PURCHASE', ?, UTC_TIMESTAMP(6))`, productID, subscriberID, attemptID, points, sourceKey(attemptID)); err != nil {
-			return err
-		}
-		var balance int64
-		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(delta_points),0) FROM point_ledger WHERE product_id=? AND subscriber_id=?`, productID, subscriberID).Scan(&balance); err != nil {
-			return err
-		}
-		message = strings.ReplaceAll(strings.ReplaceAll(purchaseMessage, "%point", strconv.FormatInt(points, 10)), "%totalpoints", strconv.FormatInt(balance, 10))
-	} else if status == "LOW_BALANCE_FAILED" {
-		message = lowBalanceMessage
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO outbound_messages
-		(product_id, subscriber_id, message_kind, body_text, delivery_state, source_event_key)
-		VALUES (?, ?, 'POINT_PURCHASE_RESULT', ?, 'PENDING', ?)`, productID, subscriberID, message, sourceKey(attemptID)); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_events (consumer_name, callback_event_id) VALUES ('soka-point-purchase', ?)`, callbackID); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return fields, nil
 }
 
 func sourceKey(attemptID int64) string {

@@ -14,6 +14,7 @@ import (
 
 	driver "github.com/go-sql-driver/mysql"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/testdb"
 )
 
 func TestConfigRejectsRemotePlainHTTP(t *testing.T) {
@@ -42,10 +43,8 @@ func TestDispatchIntegration(t *testing.T) {
 	if err := store.DB.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&connected); err != nil || connected != cfg.DBName {
 		t.Fatal("connected database differs from TEST_MYSQL_DSN")
 	}
-	for _, table := range []string{"outbound_message_events", "outbound_messages", "products", "subscribers"} {
-		if _, err := store.DB.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			t.Fatal(table, err)
-		}
+	if err := testdb.Reset(ctx, store.DB); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := store.DB.ExecContext(ctx, `INSERT INTO products(id,code,display_name) VALUES (1,'soka','Soka')`); err != nil {
 		t.Fatal(err)

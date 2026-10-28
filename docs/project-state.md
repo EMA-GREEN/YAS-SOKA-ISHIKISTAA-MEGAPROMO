@@ -30,6 +30,9 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - Legacy process and effect matrix (`docs/legacy-process-matrix.md`), covering routes, kept-running processes, external effects, legacy defects (string-built SQL, lossy unconfirmed publishing, disabled TLS checks, public test routes), and Go decisions.
 - Go intake for M-Push subscription-init and MegaPromo TigoPesa/Mixx push callbacks, acknowledged only after durable storage.
 
+- Soka paid-answer gameplay across the MO and payment workers, with migration `005_soka_answers.sql`: current question, answer level, answer scoring, fallback attempts, and dated level bonuses.
+- Broker topology: the catch-all `yas.callback.events` queue (bound to `#`, no consumer) is removed. Received kinds without a worker are parked in `yas.{soka,ishikistaa,megapromo}.pending`, and any other kind is unroutable, so it becomes a visible outbox dead letter. Integration tests share `internal/testdb.Reset`, so they can run in sequence against one database.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

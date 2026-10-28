@@ -25,6 +25,7 @@ import (
 	"yas-modernization/internal/messaging"
 	"yas-modernization/internal/relay"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/testdb"
 	"yas-modernization/internal/workers/sokamo"
 	"yas-modernization/internal/workers/sokapoints"
 )
@@ -210,15 +211,23 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 	if _, err := store.DB.ExecContext(ctx, `INSERT INTO products(id,code,display_name) VALUES (1,'soka','Soka')`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.DB.ExecContext(ctx, `INSERT INTO questions(id,product_id,question_text,answer_key,points) VALUES (21,1,'Q-CRASH','A',100)`); err != nil {
+		t.Fatal(err)
+	}
+	// Even subscribers buy points; odd ones answer, and every answer's 99 TZS
+	// charge fails for low balance so it goes through the 45 TZS fallback.
+	const purchases, answers = subscribers / 2, subscribers / 2
 	wantPoints := make(map[string]int64, subscribers)
 	for i := 1; i <= subscribers; i++ {
 		msisdn := fmt.Sprintf("2557000%05d", i)
-		wantPoints[msisdn] = tiers[i%len(tiers)].points
+		if i%2 == 0 {
+			wantPoints[msisdn] = tiers[i%len(tiers)].points
+		}
 		if _, err := store.DB.ExecContext(ctx, `INSERT INTO subscribers(id,msisdn) VALUES (?,?)`, i, msisdn); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := store.DB.ExecContext(ctx, `INSERT INTO product_subscriptions(product_id,subscriber_id,state,billing_segment,started_at)
-			VALUES (1,?,'ACTIVE','NORMAL',UTC_TIMESTAMP(6))`, i); err != nil {
+		if _, err := store.DB.ExecContext(ctx, `INSERT INTO product_subscriptions(product_id,subscriber_id,state,billing_segment,started_at,current_question_id)
+			VALUES (1,?,'ACTIVE','NORMAL',UTC_TIMESTAMP(6),21)`, i); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -244,8 +253,12 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 		defer close(feedDone)
 		for i := 1; i <= subscribers && ctx.Err() == nil; i++ {
 			msisdn := fmt.Sprintf("2557000%05d", i)
+			text := "A"
+			if i%2 == 0 {
+				text = tiers[i%len(tiers)].keyword
+			}
 			body := fmt.Sprintf(`{"requestId":"MO-CRASH-%d","requestParam":{"data":[{"name":"Msisdn","value":%q},{"name":"Type","value":"InteractiveResponse"},{"name":"CustomerResponse","value":%q},{"name":"TransactionId","value":"T-%d"}]}}`,
-				i, msisdn, tiers[i%len(tiers)].keyword, i)
+				i, msisdn, text, i)
 			save(t, ctx, store, body)
 			time.Sleep(250 * time.Millisecond)
 		}
@@ -272,6 +285,10 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 				if _, ok := answered[requestID]; !ok {
 					answered[requestID] = fmt.Sprintf(`{"requestId":%q,"requestParam":{"data":[{"name":"Msisdn","value":%q},{"name":"Type","value":"Payment"},{"name":"ChargeAmount","value":"%d"},{"name":"BillingId","value":"B-%s"}]}}`,
 						requestID, msisdn, amount, requestID)
+					if amount == 99 {
+						answered[requestID] = fmt.Sprintf(`{"requestId":%q,"requestParam":{"data":[{"name":"Msisdn","value":%q},{"name":"Type","value":"Payment"},{"name":"ChargeAmount","value":"99"},{"name":"Reason","value":"Low balance"}]}}`,
+							requestID, msisdn)
+					}
 					save(t, providerCtx, store, answered[requestID])
 				}
 			}
@@ -336,24 +353,49 @@ func TestCrashRecoveryIntegration(t *testing.T) {
 		t.Errorf("%s exited with %d after SIGTERM", role, code)
 	}
 
+	// Each answer has a failed 99 charge and a successful 45 fallback.
+	payments := purchases + 2*answers
 	for query, want := range map[string]int{
-		`SELECT COUNT(*) FROM callback_events WHERE event_kind='InteractiveResponse'`:                     subscribers,
-		`SELECT COUNT(*) FROM callback_events WHERE event_kind='Payment'`:                                 subscribers,
-		`SELECT COUNT(*) FROM interactions`:                                                               subscribers,
-		`SELECT COUNT(*) FROM payment_attempts`:                                                           subscribers,
-		`SELECT COUNT(*) FROM payment_attempts WHERE state='SUCCESS'`:                                     subscribers,
-		`SELECT COUNT(*) FROM charge_intents`:                                                             subscribers,
-		`SELECT COUNT(*) FROM payment_events`:                                                             subscribers,
-		`SELECT COUNT(*) FROM point_ledger`:                                                               subscribers,
-		`SELECT COUNT(*) FROM outbound_messages`:                                                          subscribers,
-		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-mo'`:                       subscribers,
-		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-purchase'`:                 subscribers,
-		`SELECT COUNT(*) FROM callback_outbox WHERE dead_lettered_at IS NOT NULL OR published_at IS NULL`: 0,
+		`SELECT COUNT(*) FROM callback_events WHERE event_kind='InteractiveResponse'`:                        subscribers,
+		`SELECT COUNT(*) FROM callback_events WHERE event_kind='Payment'`:                                    payments,
+		`SELECT COUNT(*) FROM interactions`:                                                                  subscribers,
+		`SELECT COUNT(*) FROM answers`:                                                                       answers,
+		`SELECT COUNT(*) FROM payment_attempts`:                                                              payments,
+		`SELECT COUNT(*) FROM payment_attempts WHERE state='SUCCESS'`:                                        subscribers,
+		`SELECT COUNT(*) FROM payment_attempts WHERE state='LOW_BALANCE_FAILED' AND amount_minor=99`:         answers,
+		`SELECT COUNT(*) FROM payment_attempts WHERE amount_minor=45 AND fallback_of_attempt_id IS NOT NULL`: answers,
+		`SELECT COUNT(*) FROM charge_intents`:                                                                payments,
+		`SELECT COUNT(*) FROM payment_events`:                                                                payments,
+		`SELECT COUNT(*) FROM point_ledger`:                                                                  subscribers,
+		`SELECT COUNT(*) FROM point_ledger WHERE reason='ANSWER'`:                                            answers,
+		`SELECT COUNT(*) FROM outbound_messages`:                                                             subscribers,
+		`SELECT COUNT(*) FROM outbound_messages WHERE message_kind='QUESTION'`:                               answers,
+		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-mo'`:                          subscribers,
+		`SELECT COUNT(*) FROM processed_events WHERE consumer_name='soka-point-purchase'`:                    payments,
+		`SELECT COUNT(*) FROM callback_outbox WHERE dead_lettered_at IS NOT NULL OR published_at IS NULL`:    0,
 	} {
 		if got := count(t, ctx, store.DB, query); got != want {
 			t.Errorf("%s = %d, want %d", query, got, want)
 		}
 	}
+	// Answer points depend on the wall-clock golden hour, so take them from the
+	// score recorded when each answer arrived.
+	answerRows, err := store.DB.QueryContext(ctx, `SELECT s.msisdn, a.points_on_success FROM answers a JOIN subscribers s ON s.id=a.subscriber_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for answerRows.Next() {
+		var msisdn string
+		var points int64
+		if err := answerRows.Scan(&msisdn, &points); err != nil {
+			t.Fatal(err)
+		}
+		if points != 100 && points != 200 {
+			t.Errorf("%s correct answer scored %d", msisdn, points)
+		}
+		wantPoints[msisdn] = points
+	}
+	answerRows.Close()
 	rows, err := store.DB.QueryContext(ctx, `SELECT s.msisdn, SUM(pl.delta_points) FROM point_ledger pl JOIN subscribers s ON s.id=pl.subscriber_id GROUP BY s.msisdn`)
 	if err != nil {
 		t.Fatal(err)
@@ -390,10 +432,8 @@ func reset(t *testing.T, ctx context.Context, db *sql.DB, ch *amqp.Channel) {
 	if _, err := db.ExecContext(ctx, `DROP TRIGGER IF EXISTS fail_e2e_message`); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"processed_events", "outbound_message_events", "outbound_messages", "point_ledger", "payment_events", "charge_intents", "payment_attempts", "interactions", "product_subscriptions", "callback_outbox", "callback_events", "products", "subscribers"} {
-		if _, err := db.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			t.Fatal(table, err)
-		}
+	if err := testdb.Reset(ctx, db); err != nil {
+		t.Fatal(err)
 	}
 	if err := ch.ExchangeDeclare("yas.callbacks", "topic", true, false, false, false, nil); err != nil {
 		t.Fatal(err)
@@ -408,13 +448,6 @@ func reset(t *testing.T, ctx context.Context, db *sql.DB, ch *amqp.Channel) {
 		if _, err := ch.QueuePurge(queue, false); err != nil {
 			t.Fatal(queue, err)
 		}
-	}
-	// The audit queue has no consumer here; empty it so repeated runs stay small.
-	if _, err := ch.QueueDeclare("yas.callback.events", true, false, false, false, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ch.QueuePurge("yas.callback.events", false); err != nil {
-		t.Fatal(err)
 	}
 }
 

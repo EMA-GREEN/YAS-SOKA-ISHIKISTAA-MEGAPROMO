@@ -11,10 +11,16 @@ func TestLoadCurrentMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 4 || files[0].Name != "001_callback_inbox_outbox.sql" || files[1].Name != "002_core_domain.sql" || files[2].Name != "003_charge_intents.sql" || files[3].Name != "004_charge_dispatch.sql" {
-		t.Fatalf("unexpected migrations: %+v", files)
+	want := []string{"001_callback_inbox_outbox.sql", "002_core_domain.sql", "003_charge_intents.sql", "004_charge_dispatch.sql", "005_soka_answers.sql"}
+	if len(files) != len(want) {
+		t.Fatalf("got %d migrations, want %d", len(files), len(want))
 	}
-	if len(files[0].Statements) < 2 || len(files[1].Statements) < 15 || len(files[2].Statements) != 2 || len(files[3].Statements) != 1 {
+	for i, name := range want {
+		if files[i].Name != name {
+			t.Fatalf("migration %d is %s, want %s", i, files[i].Name, name)
+		}
+	}
+	if len(files[0].Statements) < 2 || len(files[1].Statements) < 15 || len(files[2].Statements) != 2 || len(files[3].Statements) != 1 || len(files[4].Statements) != 4 {
 		t.Fatal("migration statements missing")
 	}
 }

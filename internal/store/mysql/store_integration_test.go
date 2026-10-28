@@ -10,6 +10,7 @@ import (
 
 	mysqldriver "github.com/go-sql-driver/mysql"
 	"yas-modernization/internal/callbacks"
+	"yas-modernization/internal/testdb"
 )
 
 // This test deliberately mutates schema. It only runs against an explicitly named test DB.
@@ -32,11 +33,8 @@ func TestSaveIntegration(t *testing.T) {
 	if err := s.DB.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&dbName); err != nil || dbName != cfg.DBName {
 		t.Fatal("connected database differs from TEST_MYSQL_DSN")
 	}
-	// The database is disposable and has received migration 001.
-	if _, err := s.DB.ExecContext(ctx, "DELETE FROM callback_outbox"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.DB.ExecContext(ctx, "DELETE FROM callback_events"); err != nil {
+	// The database is disposable and has received the numbered migrations.
+	if err := testdb.Reset(ctx, s.DB); err != nil {
 		t.Fatal(err)
 	}
 	event := func(request, payload string) callbacks.Event {

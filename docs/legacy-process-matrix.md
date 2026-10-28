@@ -31,9 +31,9 @@ The PHP publishers poll a table (`IS_OUTGOING='1'`) about every second, publish 
 | Process | Kind | Input → output | External effects | Go status |
 |---|---|---|---|---|
 | `SokaMoNotificationPublisher` | publisher | `tbl_interaction_mo_notifications` → `tigo_soka_mo_router` | — | Replaced by outbox relay |
-| `SokaMoConsumer` ×15 | consumer | MO: `QUERY_POINTS`, `SUBSCRIPTION`, `UN_SUBSCRIPTION`, `ondoa`, `soka` reactivation, answer to the current question (golden-hour scoring, levels and rewards), BOOM credit play, point-purchase keywords and menu, Predict-and-Win | Tigo Payment charge; InteractiveRequest SMS; open question; renewal subscription request | **Point purchase only** (`internal/workers/sokamo`) |
+| `SokaMoConsumer` ×15 | consumer | MO: `QUERY_POINTS`, `SUBSCRIPTION`, `UN_SUBSCRIPTION`, `ondoa`, `soka` reactivation, answer to the current question (golden-hour scoring, levels and rewards), BOOM credit play, point-purchase keywords and menu, Predict-and-Win | Tigo Payment charge; InteractiveRequest SMS; open question; renewal subscription request | **Point purchase, paid answers, keyword replies** (`internal/workers/sokamo`, `docs/soka-answer-flow.md`) |
 | `SokaPaymentNotificationPublisher` | publisher | `tbl_payment_*` (SMS channel) → `tigo_soka_payment_router` | — | Replaced by outbox relay |
-| `SokaPaymentConsumers` ×50 | consumer | payment result for answer charges, point purchases, BOOM; updates `vas_transaction_trivia*`, `tbl_qn_answers`, `tbl_qn_subscribers`, `tbl_point_purchase_*`; low-balance fallback via `tbl_mo_retry` | follow-up charge; result SMS; `sms_reprocess` on failure | **Point purchase only** (`internal/workers/sokapoints`) |
+| `SokaPaymentConsumers` ×50 | consumer | payment result for answer charges, point purchases, BOOM; updates `vas_transaction_trivia*`, `tbl_qn_answers`, `tbl_qn_subscribers`, `tbl_point_purchase_*`; low-balance fallback via `tbl_mo_retry` | follow-up charge; result SMS; `sms_reprocess` on failure | **Point purchase and answer charges, including the low-balance ladder** (`internal/workers/sokapoints`) |
 | `SokaWebPaymentNotificationPublisher`, `SokaWebPaymentConsumers` ×5 | pair | web channel payment results → answers and subscriber state | — | Pending |
 | `SokaSmsReprocessPublisher`, `SokaSmsReprocessConsumer` ×5 | pair | `sms_reprocess` due today → resend `trivia_interaction_mt_logs` text | InteractiveRequest SMS | Pending. Go marks uncertain SMS for review instead of resending. |
 | `SokaOpenQuestionScheduler` | scheduler | due `openquestion_schedule` → `tbl_openquestion_notifications` for active, non-DND subscribers in playing, top or all segments | — | Pending |
@@ -96,7 +96,9 @@ These are reports and email (`*Report*`, `Revenue*`, `MailerScript`, `*Analysis*
 3. **Messages can be lost.** None of the 40 publishers sets persistent delivery or uses publisher confirms, and they mark rows as sent after an unconfirmed publish. A broker restart or crash can drop billing and MO events. The Go outbox uses persistent messages, confirms, a lease and dead letters, and the crash test covers this.
 4. **TLS verification is disabled** (`CURLOPT_SSL_VERIFYPEER false`) in 9 files that call providers. Go adapters require HTTPS with verification.
 5. **Daily tables** are chosen by `date("Ymd")` at request time, so a callback received just after midnight lands in the next day's table. The Go inbox has no date-named tables.
-6. A `tigopesa` collection path writes to a `*_test` database, and copies of the Soka M-Push publisher and consumer sit in the Ishikistaa folder.
+6. **A provider credential is hardcoded:** the Tigo Payment CP password is in plain text in `SokaLib.php`. Treat it as compromised and rotate it. The payment endpoint is plain HTTP on a private address, which the Go dispatcher refuses until a transport decision is made.
+7. In `SokaMoConsumer.php`, the `INACTIVE` block (lines 585–1037) contains an unreachable older copy of the answer flow. Using a BOOM credit also decrements normal `CREDIT`. Error and timeout paths send a new question without updating `LAST_QN_ID`. See `docs/soka-answer-flow.md`.
+8. A `tigopesa` collection path writes to a `*_test` database, and copies of the Soka M-Push publisher and consumer sit in the Ishikistaa folder.
 
 ## 6. Behaviors chosen for Go and their tests
 

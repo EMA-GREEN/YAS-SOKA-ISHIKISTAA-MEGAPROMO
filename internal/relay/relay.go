@@ -111,10 +111,7 @@ func (r Relay) runConnection(ctx context.Context) error {
 	if err := ch.ExchangeDeclare("yas.callbacks", "topic", true, false, false, false, nil); err != nil {
 		return err
 	}
-	if _, err := ch.QueueDeclare("yas.callback.events", true, false, false, false, nil); err != nil {
-		return err
-	}
-	if err := ch.QueueBind("yas.callback.events", "#", "yas.callbacks", false, nil); err != nil {
+	if err := messaging.DeclareParked(ch); err != nil {
 		return err
 	}
 	if err := messaging.DeclareSokaPointPurchases(ch); err != nil {

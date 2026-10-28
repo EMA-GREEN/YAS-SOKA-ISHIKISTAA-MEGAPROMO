@@ -11,6 +11,7 @@ import (
 	driver "github.com/go-sql-driver/mysql"
 	"yas-modernization/internal/callbacks"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/testdb"
 	"yas-modernization/internal/workers/sokapoints"
 )
 
@@ -33,10 +34,8 @@ func TestProcessIntegration(t *testing.T) {
 	if err := store.DB.QueryRowContext(ctx, "SELECT DATABASE()").Scan(&connected); err != nil || connected != cfg.DBName {
 		t.Fatal("connected database differs from TEST_MYSQL_DSN")
 	}
-	for _, table := range []string{"processed_events", "payment_events", "point_ledger", "charge_intents", "outbound_messages", "payment_attempts", "interactions", "product_subscriptions", "callback_outbox", "callback_events", "products", "subscribers"} {
-		if _, err := store.DB.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			t.Fatal(table, err)
-		}
+	if err := testdb.Reset(ctx, store.DB); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := store.DB.ExecContext(ctx, `INSERT INTO products(id,code,display_name) VALUES (1,'soka','Soka')`); err != nil {
 		t.Fatal(err)
@@ -115,9 +114,10 @@ func TestProcessIntegration(t *testing.T) {
 	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM charge_intents`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("unknown keyword charged=%d err=%v", count, err)
 	}
+	// Unrecognized text is a charged answer in PHP; without a current question it needs review.
 	other := callback("MO-3", "HELLO")
-	if err := processor.Process(ctx, other); !errors.Is(err, ErrNotApplicable) {
-		t.Fatalf("unrelated MO err=%v", err)
+	if err := processor.Process(ctx, other); !errors.Is(err, ErrNeedsReview) {
+		t.Fatalf("answer without question err=%v", err)
 	}
 	if _, err := store.DB.ExecContext(ctx, `UPDATE product_subscriptions SET billing_segment='UNVERIFIED'`); err != nil {
 		t.Fatal(err)

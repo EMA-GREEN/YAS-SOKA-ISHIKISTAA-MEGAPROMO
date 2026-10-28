@@ -89,7 +89,10 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	if err := DeclareSokaMO(ch); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{"yas.soka.point-purchases", "yas.soka.point-purchases.dead", "yas.soka.point-mo", "yas.soka.point-mo.dead"} {
+	if err := DeclareParked(ch); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"yas.soka.point-purchases", "yas.soka.point-purchases.dead", "yas.soka.point-mo", "yas.soka.point-mo.dead", "yas.soka.pending", "yas.megapromo.pending"} {
 		if _, err := ch.QueuePurge(q, false); err != nil {
 			t.Fatal(err)
 		}
@@ -123,6 +126,21 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	}
 	if returned := publishConfirmed(t, conn, "yas.callbacks", "unmatched.IntegrationTest", "103", true); !returned {
 		t.Fatal("mandatory unroutable message was not returned")
+	}
+	// A Soka kind with no worker and no parking binding must also be returned.
+	if returned := publishConfirmed(t, conn, "yas.callbacks", "soka.UnknownKind", "105", true); !returned {
+		t.Fatal("unknown Soka kind was not returned")
+	}
+	// Kinds received before their workers exist are parked, not dropped.
+	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.pending"} {
+		if returned := publishConfirmed(t, conn, "yas.callbacks", key, "106", true); returned {
+			t.Fatalf("%s returned", key)
+		}
+		if d := receive(t, ch, queue); d.MessageId != "106" {
+			t.Fatalf("%s not parked in %s", key, queue)
+		} else if err := d.Ack(false); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if returned := publishConfirmed(t, conn, "yas.callbacks", "soka.Payment", "104", true); returned {
 		t.Fatal("routed replay test returned")

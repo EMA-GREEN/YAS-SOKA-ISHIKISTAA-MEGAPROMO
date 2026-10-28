@@ -18,6 +18,7 @@ import (
 	"yas-modernization/internal/obs"
 	"yas-modernization/internal/relay"
 	mysqlstore "yas-modernization/internal/store/mysql"
+	"yas-modernization/internal/testdb"
 	"yas-modernization/internal/workers/sokapoints"
 )
 
@@ -55,10 +56,8 @@ func TestRelayToPointWorkerIntegration(t *testing.T) {
 	if _, err := store.DB.ExecContext(ctx, `DROP TRIGGER IF EXISTS fail_e2e_message`); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"processed_events", "outbound_message_events", "outbound_messages", "point_ledger", "payment_events", "charge_intents", "payment_attempts", "interactions", "product_subscriptions", "callback_outbox", "callback_events", "products", "subscribers"} {
-		if _, err := store.DB.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			t.Fatal(table, err)
-		}
+	if err := testdb.Reset(ctx, store.DB); err != nil {
+		t.Fatal(err)
 	}
 	if err := messaging.DeclareSokaPointPurchases(ch); err != nil {
 		t.Fatal(err)
