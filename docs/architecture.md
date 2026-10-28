@@ -33,7 +33,8 @@ flowchart LR
   SokaPayment --> TargetDB
   TargetDB --> ChargeDispatcher[Guarded Soka charge dispatcher]
   ChargeDispatcher --> Provider[Provider, only when explicitly enabled]
-  TargetDB --> SMSIntent[SMS intent awaiting delivery worker]
+  TargetDB --> SMSDispatcher[Guarded Soka purchase SMS dispatcher]
+  SMSDispatcher --> SMS[SMS provider, only when explicitly enabled]
 ```
 
 ## Tradeoffs and acceptance gates
@@ -48,4 +49,4 @@ flowchart LR
 | Do not reuse legacy queues yet | Existing workers expect different payloads | Implement and test product-specific translators/workers |
 | Keep dated legacy tables initially | Avoid unverified historic data movement | Inventory all physical tables and retention rules |
 
-The callback API currently supports the three core JSON routes. The isolated Soka point-purchase database path creates a pending charge, then records a matched payment result and point award. Charge submission has an explicitly enabled adapter tested only with a fake provider; SMS delivery is still missing. M-Push, TigoPesa XML/JSON, most MO and payment paths, renewals, questions, prizes, and reporting are not migrated. Do not route production traffic to this service yet.
+The callback API currently supports the three core JSON routes. The isolated Soka point-purchase database path creates a pending charge, then records a matched payment result and point award. Charge and SMS submission have explicitly enabled adapters tested only with fake providers. SMS acceptance does not prove handset delivery. M-Push, TigoPesa XML/JSON, most MO and payment paths, renewals, questions, prizes, and reporting are not migrated. Do not route production traffic to this service yet.

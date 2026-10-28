@@ -19,6 +19,8 @@ flowchart LR
   G --> I[Record customer message intent]
   H --> I
   I --> J[Mark callback processed in same transaction]
+  I --> K[Guarded SMS dispatcher]
+  K --> L[Provider acceptance or review state]
 ```
 
 The new MO worker follows `SokaMoConsumer.php`: exact keywords are case-insensitive after trimming; a similar `P` plus digits keyword receives the menu. It requires an active subscription and verified `NORMAL` or `BOOM` billing segment. The third migration defaults existing subscriptions to `UNVERIFIED` until their source customer type is mapped. The generated payment request ID starts with `PU`, as in PHP, but its exact format must be confirmed with provider contract examples.
@@ -32,7 +34,7 @@ The worker reads only `soka.Payment` messages on `yas.soka.point-purchases`; oth
 ## Remaining before a full customer journey
 
 - Go now creates the `PENDING` attempt and charge intent for exact purchase keywords from active subscribers with a verified billing segment. A guarded dispatcher now builds and submits the legacy-shaped request, but it has only been tested against a fake provider. Real provider contract and callback reconciliation remain open.
-- Unknown `P...` keywords create the legacy purchase menu as a message intent and never create a charge. `outbound_messages` records an SMS intent; no SMS delivery worker or provider adapter exists yet.
+- Unknown `P...` keywords create the legacy purchase menu as a message intent and never create a charge. `outbound_messages` records an SMS intent. The guarded SMS dispatcher handles only these Soka purchase and menu messages; it has passed fake-provider testing, while real provider acceptance and handset delivery remain unverified.
 - The PHP worker increments a mutable subscriber level and updates old answer and daily transaction tables. The target uses an immutable point ledger; answer/level parity and historical data mapping remain open.
 - The PHP code defaults to 100 points for an unknown price. Go refuses unknown prices so a malformed or new tier cannot award an unintended amount. Confirm any new tiers before adding them.
 - The PHP worker can initiate fallback charges on non-purchase low-balance paths. This worker handles only point purchases and never initiates a charge.
