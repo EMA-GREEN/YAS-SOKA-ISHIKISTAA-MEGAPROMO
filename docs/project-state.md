@@ -38,6 +38,7 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - The charge dispatcher passed an isolated MySQL plus fake-provider test for request shape, acceptance, uncertain HTTP response, and no automatic resend.
 - The SMS dispatcher passed an isolated MySQL plus fake-provider test for request shape, one acceptance event, uncertain HTTP response, and no automatic resend. Provider acceptance does not prove handset delivery.
 - An isolated RabbitMQ 4.1 test passed for publisher confirmation, mandatory return, Soka routing, dead-letter handling, redelivery after channel closure, and durable message recovery across broker restart. Full worker plus database crash replay remains open.
+- An end-to-end relay-to-point-worker test passed against isolated MySQL 8.4 and RabbitMQ 4.1: a callback saved to the outbox was relayed and consumed; an injected worker transaction failure left no award and the message was redelivered until it succeeded once; reopening the outbox as if the relay crashed after broker confirmation republished the event without a second financial effect; a malformed message reached the visible dead-letter queue. Real process kills and the MO worker path remain untested.
 - Disposable containers were removed. No production database was touched and no remote was pushed.
 
 ## Current boundary and next work

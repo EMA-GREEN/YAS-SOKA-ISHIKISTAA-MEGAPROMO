@@ -15,7 +15,7 @@ The PHP repository is the behavioral reference. A checked item means the stated 
 - [x] Store callbacks and outbox intent atomically; relay to new RabbitMQ queues. Check: disposable MySQL retry, conflict, and rollback tests pass.
 - [x] Provide guarded, numbered target migrations. Check: disposable MySQL schema and smoke checks pass.
 - [x] Test broker confirms, mandatory returns, durable queue restart, dead letters, and redelivery after a consumer disconnect on isolated RabbitMQ. Check: executable broker suite passes before and after a container restart.
-- [ ] Test the full relay and product workers with MySQL and RabbitMQ through process crashes and recovery. Check: no lost callback, one financial effect per event, and visible dead letters.
+- [ ] Test the full relay and product workers with MySQL and RabbitMQ through process crashes and recovery. Check: no lost callback, one financial effect per event, and visible dead letters. Partial evidence: `internal/relay/relay_integration_test.go` covers the Soka point path with injected worker failure, relay replay after confirm, and dead letters; process kills and the MO path remain.
 - [ ] Add authenticated ingress, operational metrics, structured log redaction, health checks, and deployable configuration. Check: security and operations tests pass.
 
 ## 3. Soka customer flows
