@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"yas-modernization/internal/obs"
@@ -23,6 +24,16 @@ func main() {
 	defer stop()
 	reg := &obs.Registry{}
 	r := relay.Relay{DB: store.DB, AMQPURL: os.Getenv("AMQP_URL"), Log: log, Metrics: relay.NewMetrics(reg)}
+	// RELAY_BATCH_SIZE trades throughput against how many events a killed relay
+	// strands until their 30-second lease expires.
+	if raw := os.Getenv("RELAY_BATCH_SIZE"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > 1000 {
+			log.Error("RELAY_BATCH_SIZE must be 1 to 1000")
+			os.Exit(1)
+		}
+		r.BatchSize = n
+	}
 	registerOutboxGauges(reg, r)
 	if err := obs.ServeOps(ctx, obs.OpsAddr("9092"), reg, store.Ready, log); err != nil {
 		log.Error("ops listener unavailable", "error", err)

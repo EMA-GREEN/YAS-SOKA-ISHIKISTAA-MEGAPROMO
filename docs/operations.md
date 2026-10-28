@@ -51,6 +51,12 @@ In Go each dispatcher gets its token itself (`internal/tigoauth`):
 
 The token is fetched before any work is claimed, so a failed login never leaves a charge, SMS or activation half-sent. The real token lifetime and whether the endpoint rejects early re-login are not confirmed.
 
+## Scaling
+
+`docs/load-baseline.md` covers this:
+- **MO and payment workers:** scale them by running more processes, as PHP did. Each needs its own `OPS_ADDR`.
+- **Relay:** publishes in batches of `RELAY_BATCH_SIZE`. Several relays can run at once because claims use `SKIP LOCKED`.
+
 ## Deployment
 
 `deploy/yas.env.example` lists every variable with placeholders. `deploy/systemd/yas@.service` is a hardened template unit for each binary, using `yas@callbacks`, `yas@outbox-relay` and so on. It restarts on failure and stops with SIGTERM, which the crash-recovery test shows is safe at any point. The real host topology is still unknown, so these files are a starting point. They have not been validated on a target host.

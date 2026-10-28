@@ -3,6 +3,7 @@ package relay_test
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http/httptest"
@@ -216,5 +217,84 @@ func assertOneFinancialEffect(t *testing.T, ctx context.Context, db *sql.DB) {
 	var points int64
 	if err := db.QueryRowContext(ctx, `SELECT delta_points FROM point_ledger LIMIT 1`).Scan(&points); err != nil || points != 300 {
 		t.Fatalf("points %d: %v", points, err)
+	}
+}
+
+// A batch with one unroutable event publishes the others and reschedules only
+// that one.
+func TestRelayBatchWithReturnIntegration(t *testing.T) {
+	dsn, amqpURL := os.Getenv("TEST_MYSQL_DSN"), os.Getenv("TEST_AMQP_URL")
+	if dsn == "" || amqpURL == "" {
+		t.Skip("set TEST_MYSQL_DSN and TEST_AMQP_URL for isolated integration test")
+	}
+	cfg, err := driver.ParseDSN(dsn)
+	if err != nil || !strings.HasPrefix(cfg.DBName, "yas_test_") {
+		t.Fatal("TEST_MYSQL_DSN must use a yas_test_ database")
+	}
+	store, err := mysqlstore.Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := testdb.Reset(ctx, store.DB); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := amqp.Dial(amqpURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ch, err := conn.Channel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ch.Close()
+	if err := messaging.DeclareSokaMO(ch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ch.QueuePurge("yas.soka.point-mo", false); err != nil {
+		t.Fatal(err)
+	}
+	for i, kind := range []string{"InteractiveResponse", "UnroutableKind", "InteractiveResponse"} {
+		body := fmt.Sprintf(`{"requestId":"BATCH-%d","requestParam":{"data":[{"name":"Msisdn","value":"255700000001"},{"name":"Type","value":%q},{"name":"CustomerResponse","value":"x"}]}}`, i, kind)
+		event, err := callbacks.ParseJSON("soka", []byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Save(ctx, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	relayCtx, stop := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- (relay.Relay{DB: store.DB, AMQPURL: amqpURL, Log: slog.New(slog.NewTextHandler(io.Discard, nil)), BatchSize: 10}).Run(relayCtx)
+	}()
+	deadline := time.Now().Add(10 * time.Second)
+	var published, rescheduled int
+	for time.Now().Before(deadline) {
+		if err := store.DB.QueryRowContext(ctx, `SELECT
+			SUM(published_at IS NOT NULL), SUM(published_at IS NULL AND attempts>=1 AND next_attempt_at > UTC_TIMESTAMP(6))
+			FROM callback_outbox`).Scan(&published, &rescheduled); err != nil {
+			t.Fatal(err)
+		}
+		if published == 2 && rescheduled == 1 {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	stop()
+	<-done
+	if published != 2 || rescheduled != 1 {
+		t.Fatalf("published=%d rescheduled=%d, want 2 and 1", published, rescheduled)
+	}
+	var kind string
+	if err := store.DB.QueryRowContext(ctx, `SELECT event_kind FROM callback_outbox WHERE published_at IS NULL`).Scan(&kind); err != nil || kind != "UnroutableKind" {
+		t.Fatalf("rescheduled kind %q err=%v", kind, err)
+	}
+	if info, err := ch.QueueInspect("yas.soka.point-mo"); err != nil || info.Messages != 2 {
+		t.Fatalf("routed messages %d err=%v", info.Messages, err)
 	}
 }

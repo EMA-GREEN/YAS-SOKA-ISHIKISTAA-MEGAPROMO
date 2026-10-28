@@ -49,6 +49,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - MegaPromo traced into `docs/megapromo-behaviour.md`: substring keyword matching, fixed-position prizes based on the entry auto-increment ID, TigoPesa push, and renewal credits. It is not ported, pending the owner's decisions on prize and money rules. Its callbacks are received and parked.
 
+- Local load baseline and `cmd/yas-loadgen` (`docs/load-baseline.md`). The relay now publishes in confirmed batches (`RELAY_BATCH_SIZE`, default 100), raising local end-to-end throughput from about 95 to 415–579 callbacks per second with four MO workers.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.
