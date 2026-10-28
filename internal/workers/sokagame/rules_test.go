@@ -117,3 +117,29 @@ func TestOpenQuestionBody(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestParsePredict(t *testing.T) {
+	cases := []struct {
+		text string
+		step PredictStep
+		a, b int
+	}{
+		{" predict ", PredictEntry, 0, 0},
+		{"M2", PredictSlot, 2, 0},
+		{"m 12", PredictSlot, 12, 0},
+		{"M2-1", PredictScore, 2, 1},
+		{"m3 : 0", PredictScore, 3, 0},
+		{"M1,4", PredictScore, 1, 4},
+		{"M2 1", PredictBadScore, 0, 0},
+		{"M2x", PredictOther, 0, 0},
+	}
+	for _, c := range cases {
+		step, a, b := ParsePredict(c.text)
+		if step != c.step || a != c.a || b != c.b {
+			t.Errorf("ParsePredict(%q) = %v %d %d", c.text, step, a, b)
+		}
+	}
+	if !IsPredictRequest("PD12255") || !IsPredictRequest("pw9") || IsPredictRequest("PU1") || PredictRequestID(7, "255") != "PD7255" {
+		t.Fatal("predict request IDs")
+	}
+}

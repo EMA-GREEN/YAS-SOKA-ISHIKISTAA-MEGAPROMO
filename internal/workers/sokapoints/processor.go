@@ -64,9 +64,14 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	}
 	// PHP routes PU request IDs to the purchase branch; other Soka payments are
 	// answer charges only when Go created the attempt.
-	purchase := strings.Contains(requestID, "PU")
+	// PHP checks Predict-and-Win request IDs before the PU purchase branch.
+	prediction := sokagame.IsPredictRequest(requestID)
+	purchase := !prediction && strings.Contains(requestID, "PU")
 	paymentKind := "ANSWER_CHARGE"
-	if purchase {
+	switch {
+	case prediction:
+		paymentKind = "PREDICTION"
+	case purchase:
 		paymentKind = "POINT_PURCHASE"
 	}
 	var processed int
@@ -134,9 +139,12 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 		VALUES (?, ?, ?, ?, UTC_TIMESTAMP(6))`, r.attemptID, callbackID, r.status, event.Payment.Status); err != nil {
 		return err
 	}
-	if purchase {
+	switch {
+	case prediction:
+		err = settlePrediction(ctx, tx, r)
+	case purchase:
 		err = p.settlePurchase(ctx, tx, r, points)
-	} else {
+	default:
 		err = p.settleAnswer(ctx, tx, r)
 	}
 	if err != nil {
@@ -266,6 +274,46 @@ func (p Processor) settleAnswer(ctx context.Context, tx *sql.Tx, r result) error
 	default:
 		return insertMessage(ctx, tx, r, sokagame.KindError, sokagame.ErrorMsg, sourceKey(r.attemptID))
 	}
+}
+
+// settlePrediction follows PredictAndWin::handlePayment. Success confirms the
+// prediction and lets the subscriber choose another fixture; any failure
+// reopens the chosen fixture so they can send the score again. There is no
+// fallback charge and no points.
+func settlePrediction(ctx context.Context, tx *sql.Tx, r result) error {
+	var submissionID, fixtureID, slot int64
+	err := tx.QueryRowContext(ctx, `SELECT id, fixture_id, slot FROM predict_submissions WHERE payment_attempt_id=? FOR UPDATE`, r.attemptID).
+		Scan(&submissionID, &fixtureID, &slot)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: prediction for charge not found", ErrInvalid)
+	}
+	if err != nil {
+		return err
+	}
+	key := sourceKey(r.attemptID)
+	if r.status == "SUCCESS" {
+		if _, err := tx.ExecContext(ctx, `UPDATE predict_submissions SET status='CONFIRMED', confirmed_at=UTC_TIMESTAMP(6) WHERE id=?`, submissionID); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE predict_sessions SET state='SUBMITTED', pending_submission_id=NULL, selected_slot=NULL, selected_fixture_id=NULL
+			WHERE product_id=? AND subscriber_id=?`, r.productID, r.subscriberID); err != nil {
+			return err
+		}
+		return insertMessage(ctx, tx, r, "PREDICT_RECEIVED", sokagame.PredictReceived, key)
+	}
+	status, kind, body := "PAYMENT_FAILED", "PREDICT_ERROR", sokagame.PredictError
+	if r.status == "LOW_BALANCE_FAILED" {
+		status, kind, body = "LOW_BALANCE_FAILED", "PREDICT_LOW_BALANCE", sokagame.PredictLowBalance
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE predict_submissions SET status=? WHERE id=?`, status, submissionID); err != nil {
+		return err
+	}
+	// PHP only updates an existing session; an expired, deleted one stays gone.
+	if _, err := tx.ExecContext(ctx, `UPDATE predict_sessions SET state='FIXTURE_CHOSEN', selected_slot=?, selected_fixture_id=?, pending_submission_id=NULL,
+		expires_at=DATE_ADD(UTC_TIMESTAMP(6), INTERVAL 24 HOUR) WHERE product_id=? AND subscriber_id=?`, slot, fixtureID, r.productID, r.subscriberID); err != nil {
+		return err
+	}
+	return insertMessage(ctx, tx, r, kind, body, key)
 }
 
 // nextQuestion picks a random current question, as PHP picks a random ID in

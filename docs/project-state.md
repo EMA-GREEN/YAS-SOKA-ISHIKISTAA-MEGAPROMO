@@ -39,6 +39,8 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - Soka M-Push subscription-init activations: intents in the MO worker, confirmation on Activation, and the guarded `cmd/soka-activation-dispatcher` (migration 009).
 
+- Soka Predict-and-Win: fixture list, slot choice, score submission with a 99 TZS charge, and payment confirmation or reopening (migration 010). Grading predictions as won or lost is not in the source repository.
+
 ## Validation completed
 
 - `go test -race ./...` and `go vet ./...` passed.

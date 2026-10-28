@@ -99,9 +99,6 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	class := sokagame.Answer
 	if kind == "InteractiveResponse" {
 		class = sokagame.Classify(fields["CustomerResponse"], fields["Reason"])
-		if class == sokagame.Predict {
-			return ErrNotApplicable
-		}
 	}
 	var processed int
 	err = tx.QueryRowContext(ctx, `SELECT 1 FROM processed_events WHERE consumer_name='soka-point-mo' AND callback_event_id=?`, callbackID).Scan(&processed)
@@ -124,6 +121,8 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 		return err
 	}
 	switch {
+	case class == sokagame.Predict:
+		err = p.predict(ctx, m, sub)
 	case class == sokagame.OpenQuestion:
 		// PHP sends the open question to any MSISDN before checking the
 		// subscription; Go needs one to know the points and question.

@@ -238,12 +238,10 @@ func TestAnswerJourneyIntegration(t *testing.T) {
 	if count(`SELECT COUNT(*) FROM outbound_messages WHERE message_kind IN ('HELP_MESSAGE','ONDOA_UNSUB_SMS')`) != 2 {
 		t.Fatal("help and ondoa replies")
 	}
-	for request, c := range map[string][2]string{
-		"SKIP-PREDICT": {"M2-1", ""},
-	} {
-		if err := mo.Process(ctx, sendMO(request, c[0], c[1])); !errors.Is(err, ErrNotApplicable) {
-			t.Errorf("%s err=%v", request, err)
-		}
+	// Predict traffic gets the predict hint, never an answer charge.
+	mustProcess("predict", mo.Process(ctx, sendMO("SKIP-PREDICT", "M2-1", "")))
+	if count(`SELECT COUNT(*) FROM outbound_messages WHERE message_kind='PREDICT_HINT'`) != 1 {
+		t.Fatal("predict traffic must get the predict hint")
 	}
 	// The provider's no-open-question reason gets the open question, not a charge.
 	mustProcess("open question", mo.Process(ctx, sendMO("OPEN-Q", "A", "No open question for the subscriber")))
