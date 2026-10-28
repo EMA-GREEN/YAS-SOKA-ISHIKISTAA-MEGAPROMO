@@ -97,7 +97,7 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	class := sokagame.Answer
 	if kind == "InteractiveResponse" {
 		class = sokagame.Classify(fields["CustomerResponse"], fields["Reason"])
-		if class == sokagame.Predict || class == sokagame.OpenQuestion {
+		if class == sokagame.Predict {
 			return ErrNotApplicable
 		}
 	}
@@ -121,10 +121,17 @@ func (p Processor) Process(ctx context.Context, callbackID int64) error {
 	if err != nil {
 		return err
 	}
-	switch kind {
-	case "Activation", "RequestSendSms":
+	switch {
+	case class == sokagame.OpenQuestion:
+		// PHP sends the open question to any MSISDN before checking the
+		// subscription; Go needs one to know the points and question.
+		if sub == nil {
+			return ErrNotApplicable
+		}
+		err = m.openQuestion(ctx, sub)
+	case kind == "Activation" || kind == "RequestSendSms":
 		err = p.subscribe(ctx, m, sub, sokagame.IsBoomTag(fields["CustomerType"]))
-	case "DeActivation":
+	case kind == "DeActivation":
 		err = m.deactivate(ctx, sub)
 	default:
 		err = p.interactive(ctx, m, sub, class)

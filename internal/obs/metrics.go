@@ -56,10 +56,16 @@ func (r *Registry) Counter(name, help string, labels ...string) *CounterVec {
 	return c
 }
 
-func (c *CounterVec) Inc(values ...string) {
+func (c *CounterVec) Inc(values ...string) { c.Add(1, values...) }
+
+// Add increases the counter by v, which must not be negative.
+func (c *CounterVec) Add(v float64, values ...string) {
+	if v < 0 {
+		panic("counter decreased")
+	}
 	key := labelKey(c.labels, values)
 	c.mu.Lock()
-	c.values[key]++
+	c.values[key] += v
 	c.mu.Unlock()
 }
 

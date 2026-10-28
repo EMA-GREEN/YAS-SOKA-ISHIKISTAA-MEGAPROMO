@@ -265,6 +265,25 @@ func (m *mo) end(ctx context.Context, sub *subscription) error {
 	return m.event(ctx, sub, "UNSUBSCRIBED")
 }
 
+// openQuestion answers the provider's "no open question" reason with
+// OPEN_QN_CONTENT and the subscriber's current question, in any state.
+func (m *mo) openQuestion(ctx context.Context, sub *subscription) error {
+	if err := m.recordInteraction(ctx, "MO", m.fields["CustomerResponse"]); err != nil {
+		return err
+	}
+	var question string
+	if sub.questionID.Valid {
+		if err := m.tx.QueryRowContext(ctx, `SELECT question_text FROM questions WHERE id=?`, sub.questionID.Int64).Scan(&question); err != nil {
+			return err
+		}
+	}
+	points, err := m.balance(ctx)
+	if err != nil {
+		return err
+	}
+	return m.message(ctx, sokagame.KindOpenQuestion, sokagame.OpenQuestionBody(sokagame.OpenQuestionContent, question, m.msisdn, points))
+}
+
 // nextQuestion picks a random current question, as PHP picks a random ID in
 // MIN_QN_ID..MAX_QN_ID. It returns nil when the product has none.
 func nextQuestion(ctx context.Context, tx *sql.Tx, productID int64) (any, string, error) {

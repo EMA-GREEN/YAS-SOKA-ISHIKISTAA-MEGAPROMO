@@ -110,3 +110,10 @@ func TestSubscriptionRules(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestOpenQuestionBody(t *testing.T) {
+	got := OpenQuestionBody("Alama %s kwa %msisdn. Café", "Nani?", "255700000001", 40)
+	if got != "Alama 40 kwa 255700000001. Cafe Nani?" {
+		t.Fatal(got)
+	}
+}

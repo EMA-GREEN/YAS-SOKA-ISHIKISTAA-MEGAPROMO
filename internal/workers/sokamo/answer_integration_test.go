@@ -239,11 +239,17 @@ func TestAnswerJourneyIntegration(t *testing.T) {
 		t.Fatal("help and ondoa replies")
 	}
 	for request, c := range map[string][2]string{
-		"SKIP-PREDICT": {"M2-1", ""}, "SKIP-OPEN": {"A", "No open question for the subscriber"},
+		"SKIP-PREDICT": {"M2-1", ""},
 	} {
 		if err := mo.Process(ctx, sendMO(request, c[0], c[1])); !errors.Is(err, ErrNotApplicable) {
 			t.Errorf("%s err=%v", request, err)
 		}
+	}
+	// The provider's no-open-question reason gets the open question, not a charge.
+	mustProcess("open question", mo.Process(ctx, sendMO("OPEN-Q", "A", "No open question for the subscriber")))
+	if err := store.DB.QueryRowContext(ctx, `SELECT body_text FROM outbound_messages WHERE message_kind='OPEN_QUESTION'`).Scan(&body); err != nil ||
+		!strings.HasPrefix(body, "Hongera sana umejikusanyia alama 180 hadi sasa.") {
+		t.Fatalf("open question %q err=%v", body, err)
 	}
 	if count(`SELECT COUNT(*) FROM charge_intents`) != charges {
 		t.Fatal("keywords or skipped MOs created a charge")
