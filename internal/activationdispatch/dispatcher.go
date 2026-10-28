@@ -21,8 +21,11 @@ import (
 	"yas-modernization/internal/tigoauth"
 )
 
-// OfferCode is the activation offer in PHP.
+// OfferCode is Soka's activation offer in PHP.
 const OfferCode = "017008600010"
+
+// offers are each product's M-Push activation offer.
+var offers = map[string]string{"soka": OfferCode, "ishikistaa": "017008600009"}
 
 type Config struct {
 	Endpoint, CPID, Password, Username, AccessToken, SourceAddress string
@@ -37,8 +40,8 @@ type Dispatcher struct {
 }
 
 type attempt struct {
-	id                int64
-	requestID, msisdn string
+	id                         int64
+	requestID, msisdn, product string
 }
 
 func (c Config) validate() error {
@@ -119,9 +122,9 @@ func (d Dispatcher) claim(ctx context.Context) (*attempt, error) {
 	}
 	defer tx.Rollback()
 	var item attempt
-	err = tx.QueryRowContext(ctx, `SELECT a.id, a.external_request_id, s.msisdn FROM activation_attempts a
+	err = tx.QueryRowContext(ctx, `SELECT a.id, a.external_request_id, s.msisdn, p.code FROM activation_attempts a
 		JOIN products p ON p.id=a.product_id JOIN subscribers s ON s.id=a.subscriber_id
-		WHERE a.state='PENDING' AND p.code='soka' ORDER BY a.id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&item.id, &item.requestID, &item.msisdn)
+		WHERE a.state='PENDING' AND p.code IN ('soka','ishikistaa') ORDER BY a.id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&item.id, &item.requestID, &item.msisdn, &item.product)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -149,7 +152,7 @@ func (d Dispatcher) send(ctx context.Context, item attempt, token string) (int, 
 		"sourceAddress": d.Config.SourceAddress, "operation": "ACTIVATE",
 		"username": d.Config.Username, "password": hex.EncodeToString(hash[:]),
 		"requestParam": map[string]any{"data": []map[string]string{
-			{"name": "OfferCode", "value": OfferCode},
+			{"name": "OfferCode", "value": offers[item.product]},
 			{"name": "Msisdn", "value": item.msisdn},
 			{"name": "CpId", "value": d.Config.CPID},
 		}},

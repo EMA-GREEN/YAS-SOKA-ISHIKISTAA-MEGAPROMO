@@ -37,6 +37,9 @@ type Profile struct {
 	Predict, Boom, LevelBonuses, LevelOnPayment bool
 	// PlainReactivation sends just "question." when an activation reactivates.
 	PlainReactivation bool
+	// ActivationConfirmDays is how many earlier days an Activation looks back
+	// to confirm an M-Push request: Soka checks yesterday's log too.
+	ActivationConfirmDays int
 }
 
 var Soka = &Profile{
@@ -49,6 +52,7 @@ var Soka = &Profile{
 	FirstAppend: FirstAppend, TermsSuffix: TermsSuffix, NonCustomer: NonCustomer, OpenQuestionContent: OpenQuestionContent,
 	InactiveReply: InactiveSub, InactiveReplyKind: KindInactiveSub,
 	Predict: true, Boom: true, LevelBonuses: true, LevelOnPayment: true,
+	ActivationConfirmDays: 1,
 }
 
 // Ishikistaa follows YAS-ISHIKISTAA-SDP/config.php and IshikistaaLib.php.

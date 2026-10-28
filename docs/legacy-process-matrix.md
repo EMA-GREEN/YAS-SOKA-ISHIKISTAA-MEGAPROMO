@@ -55,10 +55,10 @@ These have a launcher `.sh` but no check loop, and their publishers have no laun
 
 | Process | Kind | Input → output | Effects | Go status |
 |---|---|---|---|---|
-| `IshikistaaMoNotificationPublisher`, `IshikistaaMoConsumer` ×10 | pair | MO gameplay, subscription, points query, M-Push activation callback | charge, SMS, open question | **Done** on the shared engine (`cmd/ishikistaa-mo-worker`, `docs/ishikistaa-differences.md`); M-Push pending |
+| `IshikistaaMoNotificationPublisher`, `IshikistaaMoConsumer` ×10 | pair | MO gameplay, subscription, points query, M-Push activation callback | charge, SMS, open question | **Done** on the shared engine (`cmd/ishikistaa-mo-worker`, `docs/ishikistaa-differences.md`) |
 | `IshikistaaPaymentNotificationPublisher`, `IshikistaaPaymentConsumers` ×30 | pair | payment results → answers, point purchase, subscriber | follow-up charge, SMS | **Done** (`cmd/ishikistaa-payment-worker`), with the fallback-crediting bug fixed |
 | `IshikistaaOpenQuestionScheduler`, `…Publisher`, `…Consumer` ×5 | scheduler and pair | as for Soka | open question SMS | **Done** by the shared open-question scheduler |
-| `IshikistaaMpushYasSubsInitNotificationPublisher`, `…Consumer` ×5 | pair | M-Push init | M-Push activation | Pending |
+| `IshikistaaMpushYasSubsInitNotificationPublisher`, `…Consumer` ×5 | pair | M-Push init | M-Push activation | **Done:** shared activation intents and dispatcher with the Ishikistaa offer |
 | `IshikistaaSubscriptionConsumer`, `IshikistaaNewRenewalConsumers` | started by script | subscription and renewal queues | SMS, renewal | Pending |
 
 This folder also holds copies of the `SokaMpushYasSubsInit*` publisher and consumer, which use the **Soka** queue. No Ishikistaa check script runs them. Confirm they are not started on that host, or they would compete with the Soka consumers.
@@ -83,7 +83,7 @@ These are reports and email (`*Report*`, `Revenue*`, `MailerScript`, `*Analysis*
 | Tigo Payment charge | `*Lib::sendCharging` (MD5 CP password, offer codes) | Soka point purchase only; guarded, no auto-retry |
 | Interactive SMS (InteractiveRequest) | `*Lib::interactiveRequest`, question and open-question senders | Soka purchase SMS only; guarded |
 | Kannel `sendsms` | reports and some MO paths | Pending |
-| M-Push YAS subscription activation | `*Lib::sendMpushYasSubscriptionActivation` | Soka done (guarded); Ishikistaa and MegaPromo pending |
+| M-Push YAS subscription activation | `*Lib::sendMpushYasSubscriptionActivation` | Soka and Ishikistaa done (guarded); MegaPromo pending |
 | Renewal content and subscription requests | `*Lib::sendRenewalContent`, `sendRenewal` | Soka `sendRenewal` done as guarded `renewal_requests` and `cmd/soka-renewal-dispatcher`; renewal content pending |
 | BOOM credit award | `BoomCustomerCreditAwardMessageHandler`, BOOM token API | Pending |
 | TigoPesa / Mixx push collection | `TigoMegaPromoMobileMoneyController` | Pending |

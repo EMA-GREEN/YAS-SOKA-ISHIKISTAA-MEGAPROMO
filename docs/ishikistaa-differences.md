@@ -58,7 +58,7 @@ The PHP code is a copy of Soka with changes, so this lists only the differences.
 - `cmd/ishikistaa-mo-worker` reads `yas.ishikistaa.mo`: InteractiveResponse, Activation, RequestSendSms and DeActivation. Its metrics are on `127.0.0.1:9100`.
 - `cmd/ishikistaa-payment-worker` reads `yas.ishikistaa.payments`, with metrics on `127.0.0.1:9101`.
 - Each queue has its own dead-letter queue and consumer name.
-- Ishikistaa M-Push events stay parked in `yas.ishikistaa.pending`. Any other unknown Ishikistaa kind is now unroutable.
+- Ishikistaa M-Push events go to the MO worker as for Soka. The activation dispatcher sends them with Ishikistaa's offer, `017008600009`, and an `Activation` confirms only that day's request, matching `updateMpushSubsInitActivationCallback`. Any unknown Ishikistaa kind is unroutable.
 
 **Dispatchers.** The charge, SMS and renewal dispatchers serve both products from one process each. Each uses the product's charge offers, SMS offer (`017008600009`) and renewal `serviceID` (`ISHIKISTAA`). The open-question scheduler handles both products' schedules.
 
@@ -91,9 +91,10 @@ The PHP code is a copy of Soka with changes, so this lists only the differences.
 - **SMS test:** checks the Ishikistaa offer.
 - **Binary smoke run:** an Ishikistaa activation and answer went through the callback server, relay and both workers to an active subscription, two renewal requests, the welcome and a 99 TZS charge on `017008600007`.
 - **Soka regression:** every Soka suite still passes.
+- **M-Push:** the Ishikistaa journey covers an M-Push request, an older request not confirmed, and a same-day request confirmed. The activation dispatcher test checks Ishikistaa's offer.
+- **Crash test:** two more roles, `ishi-mo` and `ishi-pay`, run the Ishikistaa profile while ten Ishikistaa customers answer through the 99 → 45 fallback. Three runs, each with 41–45 kills across five roles, converged with exactly one credit per answer on the Ishikistaa offer.
 
 **Not ported:**
-- Ishikistaa M-Push activation.
 - Renewal content, which as in Soka is not evidenced as live.
 - Web payments.
 - Ishikistaa reports.

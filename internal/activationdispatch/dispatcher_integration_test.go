@@ -79,6 +79,27 @@ func TestDispatchIntegration(t *testing.T) {
 	if !strings.Contains(string(data), `"255700000001"`) || !strings.Contains(string(data), OfferCode) {
 		t.Fatalf("request data %s", data)
 	}
+	// An Ishikistaa activation uses Ishikistaa's offer.
+	for _, q := range []string{
+		`INSERT INTO products(id,code,display_name) VALUES (2,'ishikistaa','Ishikistaa')`,
+		`INSERT INTO product_subscriptions(id,product_id,subscriber_id,state,billing_segment) VALUES (3,2,1,'INACTIVE','NORMAL')`,
+		`INSERT INTO activation_attempts(id,subscription_id,product_id,subscriber_id,external_request_id,channel,state,requested_at)
+			VALUES (3,3,2,1,'MP-3','SMS','PENDING',UTC_TIMESTAMP(6))`,
+	} {
+		if _, err := store.DB.ExecContext(ctx, q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	if _, err := d.DispatchOne(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 3 {
+		t.Fatalf("Ishikistaa activation not sent: %d", len(bodies))
+	}
+	ishiData, _ := json.Marshal(bodies[2]["requestParam"])
+	if !strings.Contains(string(ishiData), "017008600009") {
+		t.Fatalf("Ishikistaa offer missing: %s", ishiData)
+	}
 	for id, want := range map[int]string{1: "SENT", 2: "NEEDS_REVIEW"} {
 		var state, provider string
 		if err := store.DB.QueryRowContext(ctx, `SELECT state, provider_status FROM activation_attempts WHERE id=?`, id).Scan(&state, &provider); err != nil || state != want {

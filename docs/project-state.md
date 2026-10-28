@@ -45,7 +45,7 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 
 - Tigo API login token client (`internal/tigoauth`), used by the charge, SMS and activation dispatchers before they claim work. Findings: Soka renewal content and Android payments are not live in the PHP code.
 
-- Ishikistaa on the shared trivia engine with a per-product profile: `cmd/ishikistaa-mo-worker` and `cmd/ishikistaa-payment-worker`, their own queues, and per-product offers and service IDs in the shared dispatchers. PHP defects fixed include fallback charges that were never credited.
+- Ishikistaa on the shared trivia engine with a per-product profile: `cmd/ishikistaa-mo-worker` and `cmd/ishikistaa-payment-worker`, their own queues, and per-product offers and service IDs in the shared dispatchers. PHP defects fixed include fallback charges that were never credited. Ishikistaa M-Push activation is done, and the crash test kills Ishikistaa workers alongside Soka's.
 
 - MegaPromo traced into `docs/megapromo-behaviour.md`: substring keyword matching, fixed-position prizes based on the entry auto-increment ID, TigoPesa push, and renewal credits. It is not ported, pending the owner's decisions on prize and money rules. Its callbacks are received and parked.
 

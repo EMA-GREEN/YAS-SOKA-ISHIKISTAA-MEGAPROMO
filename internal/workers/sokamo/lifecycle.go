@@ -380,12 +380,13 @@ func (p Processor) mpush(ctx context.Context, tx *sql.Tx, callbackID int64, msis
 }
 
 // confirmActivation follows confirmMpushSubsInitActivation: an Activation
-// callback confirms the newest unconfirmed M-Push request from today or
-// yesterday. A request not yet sent is then never sent.
+// callback confirms the newest unconfirmed M-Push request from today, or from
+// as many earlier days as the product looks back (Soka: one). A request
+// confirmed before it was sent is then never sent.
 func (m *mo) confirmActivation(ctx context.Context, sub *subscription) error {
 	_, err := m.tx.ExecContext(ctx, `UPDATE activation_attempts SET state='CONFIRMED', responded_at=UTC_TIMESTAMP(6)
 		WHERE subscription_id=? AND state IN ('PENDING','SENT','NEEDS_REVIEW') AND requested_at >= ?
-		ORDER BY id DESC LIMIT 1`, sub.id, sokagame.DarDayStart(m.now).AddDate(0, 0, -1))
+		ORDER BY id DESC LIMIT 1`, sub.id, sokagame.DarDayStart(m.now).AddDate(0, 0, -m.prof.ActivationConfirmDays))
 	return err
 }
 

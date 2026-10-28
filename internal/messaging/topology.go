@@ -54,7 +54,7 @@ func DeclareSokaMO(ch *amqp.Channel) error {
 // and the event becomes a visible outbox dead letter instead of vanishing.
 var parked = map[string][]string{
 	"yas.soka.pending":       {},
-	"yas.ishikistaa.pending": {"ishikistaa.MpushSubsInit"},
+	"yas.ishikistaa.pending": {},
 	"yas.megapromo.pending":  {"megapromo.#"},
 }
 
@@ -63,7 +63,7 @@ var parked = map[string][]string{
 // unbinding a binding that does not exist.
 var retired = map[string][]string{
 	"yas.soka.pending":       {"soka.Activation", "soka.DeActivation", "soka.RequestSendSms", "soka.MpushSubsInit"},
-	"yas.ishikistaa.pending": {"ishikistaa.#"},
+	"yas.ishikistaa.pending": {"ishikistaa.#", "ishikistaa.MpushSubsInit"},
 }
 
 // DeclareParked declares the holding queues. Workers that take over a kind must
@@ -119,7 +119,7 @@ func declareWorkerQueue(ch *amqp.Channel, queue string, keys ...string) error {
 // the provider's subscription callbacks.
 func DeclareIshikistaaMO(ch *amqp.Channel) error {
 	return declareWorkerQueue(ch, "yas.ishikistaa.mo",
-		"ishikistaa.InteractiveResponse", "ishikistaa.Activation", "ishikistaa.RequestSendSms", "ishikistaa.DeActivation")
+		"ishikistaa.InteractiveResponse", "ishikistaa.Activation", "ishikistaa.RequestSendSms", "ishikistaa.DeActivation", "ishikistaa.MpushSubsInit")
 }
 
 // DeclareIshikistaaPayments is the Ishikistaa payment worker's queue.

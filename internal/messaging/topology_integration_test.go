@@ -142,7 +142,7 @@ func TestBrokerRoutingAndRecovery(t *testing.T) {
 	for key, queue := range map[string]string{"megapromo.TigoPesaPushResult": "yas.megapromo.pending", "soka.MpushSubsInit": "yas.soka.point-mo",
 		"soka.Activation": "yas.soka.point-mo", "soka.DeActivation": "yas.soka.point-mo", "soka.RequestSendSms": "yas.soka.point-mo",
 		"ishikistaa.InteractiveResponse": "yas.ishikistaa.mo", "ishikistaa.DeActivation": "yas.ishikistaa.mo",
-		"ishikistaa.Payment": "yas.ishikistaa.payments", "ishikistaa.MpushSubsInit": "yas.ishikistaa.pending"} {
+		"ishikistaa.Payment": "yas.ishikistaa.payments", "ishikistaa.MpushSubsInit": "yas.ishikistaa.mo"} {
 		if returned := publishConfirmed(t, conn, "yas.callbacks", key, "106", true); returned {
 			t.Fatalf("%s returned", key)
 		}

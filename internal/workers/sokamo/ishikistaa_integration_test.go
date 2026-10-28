@@ -203,6 +203,37 @@ func TestIshikistaaIntegration(t *testing.T) {
 	if _, body := last(user); state(user) != "ACTIVE" || body != "Q-ISHI." {
 		t.Fatalf("reactivating activation %q", body)
 	}
+	// M-Push init: an activation attempt, confirmed only by a same-day Activation.
+	const pushed = "255700000696"
+	mpush, _, err := callbacks.ParseMpush("ishikistaa", []byte(`{"msisdn":"`+pushed+`","channel":"USSD"}`), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mpushID, err := store.Save(ctx, mpush)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mo.Process(ctx, mpushID); err != nil {
+		t.Fatal(err)
+	}
+	exec(`UPDATE activation_attempts SET requested_at=DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 2 DAY)`)
+	send(pushed, "Activation", map[string]string{"SubscriptionStatus": "A"})
+	if count(`SELECT COUNT(*) FROM activation_attempts WHERE state='PENDING' AND product_id=2`) != 1 {
+		t.Fatal("an older Ishikistaa M-Push request must not be confirmed")
+	}
+	mpush2, _, _ := callbacks.ParseMpush("ishikistaa", []byte(`{"msisdn":"`+pushed+`","channel":"SMS"}`), now)
+	mpush2ID, err := store.Save(ctx, mpush2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mo.Process(ctx, mpush2ID); err != nil {
+		t.Fatal(err)
+	}
+	send(pushed, "Activation", map[string]string{"SubscriptionStatus": "A"})
+	if count(`SELECT COUNT(*) FROM activation_attempts WHERE state='CONFIRMED' AND product_id=2 AND channel='SMS'`) != 1 {
+		t.Fatal("a same-day Ishikistaa M-Push request must be confirmed")
+	}
+
 	// An unknown customer gets NON_CUSTOMER and is not auto-subscribed.
 	send("255700000697", "InteractiveResponse", map[string]string{"CustomerResponse": "hello"})
 	if kind, _ := last("255700000697"); state("255700000697") != "INACTIVE" || kind != sokagame.KindNonCustomer {
