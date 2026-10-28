@@ -2,7 +2,7 @@
 
 This isolated Go workspace preserves the PHP source at `/Users/dany/Projects/work/YAS-SOKA-ISHIKISTAA-MEGAPROMO`. It is **not production-ready**. The existing application and databases have not been changed.
 
-Implemented: JSON callback parsing for Soka, Ishikistaa, and MegaPromo; matching callback routes and success response shape; MySQL transaction for callback receipt and outbox intent; RabbitMQ relay with publisher confirms, retry, lease, and dead-letter state; health/readiness endpoints; unit and HTTP contract tests. The target domain schema now covers subscriptions, activation, questions, interactions, payments, answers, points, promotions, prizes, outbound messages, and processing deduplication. The relay publishes to a **new** queue and has no product consumer yet.
+Implemented: JSON callback parsing for Soka, Ishikistaa, and MegaPromo; matching callback routes and success response shape; MySQL transaction for callback receipt and outbox intent; RabbitMQ relay with publisher confirms, retry, lease, and dead-letter state; health/readiness endpoints; unit and HTTP contract tests, including PHP-derived payment routing characterization. The target domain schema now covers subscriptions, activation, questions, interactions, payments, answers, points, promotions, prizes, outbound messages, and processing deduplication. The relay publishes to a **new** queue and has no product consumer yet.
 
 ## Local commands
 
@@ -12,4 +12,4 @@ Use Go 1.24+ and dependencies from `go.mod`. `go run ./cmd/migrator` prints an o
 
 ## Deployment block
 
-Do not switch provider traffic. The live schema and MySQL version are unknown; mobile money and M-Push routes, business workers, consumer use of the idempotency table, authentication controls, observability deployment, and rollback are incomplete. Review `docs/architecture.md`, `docs/schema.md`, and `docs/source-schema-inventory.md` before continuing.
+Do not switch provider traffic. The live schema and MySQL version are unknown; mobile money and M-Push routes, business workers, consumer use of the idempotency table, authentication controls, observability deployment, and rollback are incomplete. Review `docs/architecture.md`, `docs/schema.md`, `docs/source-schema-inventory.md`, and `docs/legacy-callback-contract.md` before continuing.

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"yas-modernization/internal/legacycontract"
 )
 
 type Event struct {
@@ -17,6 +19,7 @@ type Event struct {
 	MSISDN    string
 	Payload   []byte
 	Hash      [32]byte
+	Payment   legacycontract.PaymentProjection
 }
 
 type envelope struct {
@@ -50,6 +53,7 @@ func ParseJSON(product string, body []byte) (Event, error) {
 		return Event{}, fmt.Errorf("%w: required fields", ErrInvalid)
 	}
 	fields := map[string]string{}
+	rawFields := map[string]json.RawMessage{}
 	for _, item := range env.RequestParam.Data {
 		if item.Name == "" {
 			return Event{}, fmt.Errorf("%w: field name", ErrInvalid)
@@ -59,9 +63,17 @@ func ParseJSON(product string, body []byte) (Event, error) {
 		}
 		var value string
 		if err := json.Unmarshal(item.Value, &value); err != nil {
-			return Event{}, fmt.Errorf("%w: field value", ErrInvalid)
+			if item.Name != "ChargeAmount" {
+				return Event{}, fmt.Errorf("%w: field value", ErrInvalid)
+			}
+			var numeric json.Number
+			if err := json.Unmarshal(item.Value, &numeric); err != nil || numeric == "" {
+				return Event{}, fmt.Errorf("%w: field value", ErrInvalid)
+			}
+			value = numeric.String()
 		}
 		fields[item.Name] = value
+		rawFields[item.Name] = item.Value
 	}
 	msisdn, kind := strings.TrimSpace(fields["Msisdn"]), fields["Type"]
 	if msisdn == "" || len(msisdn) > 32 || kind == "" || len(kind) > 64 {
@@ -76,5 +88,9 @@ func ParseJSON(product string, body []byte) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	return Event{Product: product, RequestID: env.RequestID, Kind: kind, MSISDN: msisdn, Payload: canonical, Hash: sha256.Sum256(canonical)}, nil
+	event := Event{Product: product, RequestID: env.RequestID, Kind: kind, MSISDN: msisdn, Payload: canonical, Hash: sha256.Sum256(canonical)}
+	if kind == "Payment" {
+		event.Payment = legacycontract.Payment(product, env.RequestID, rawFields["ChargeAmount"], fields["Reason"])
+	}
+	return event, nil
 }
