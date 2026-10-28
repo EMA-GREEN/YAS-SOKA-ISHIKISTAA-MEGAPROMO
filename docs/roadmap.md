@@ -36,4 +36,4 @@ Use `slog` JSON without payload, MSISDN, or secret values. Propagate request ID 
 
 ## Validation before production
 
-Unit and HTTP tests pass for the first slice. Still required: MySQL integration tests with failure injection, RabbitMQ publisher confirmation and return tests, consumer crash/replay tests, full provider contract tests, race/load tests, TLS and authorization tests, backup restoration, migration rehearsal, and production-like benchmark. No performance improvement claim is made.
+Unit and HTTP tests pass for the first slice. Callback MySQL integration tests with injected outbox failure now pass in a disposable database. Still required: broader MySQL worker integration tests, RabbitMQ publisher confirmation and return tests, consumer crash/replay tests, full provider contract tests, race/load tests, TLS and authorization tests, backup restoration, migration rehearsal, and production-like benchmark. No performance improvement claim is made.

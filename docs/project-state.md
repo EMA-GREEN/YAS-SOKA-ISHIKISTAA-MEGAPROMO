@@ -18,6 +18,7 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - Target schema in numbered SQL files for subscriptions, activation, questions, interactions, payments, answers, points, promotions, prizes, outbound messages, and processing deduplication.
 - Offline-plan-by-default Go migrator with explicit apply flag, target database name check, checksums, status tracking, and a migration lock.
 - Editable Mermaid target ERDs and migration roadmap in `docs/`.
+- Code-based source table-family inventory and preliminary source-to-target mapping in `docs/source-schema-inventory.md`.
 
 ## Validation completed
 
@@ -25,10 +26,11 @@ The source application is PHP, not Python. Its callback gateway uses CodeIgniter
 - Both SQL migrations and synthetic smoke data applied in a disposable, network-isolated MySQL 8.4 container: 20 application tables, 36 foreign keys, plus the migrator tracking table.
 - Migrator rerun skipped applied scripts; mismatched target name was rejected.
 - Invalid cross-product links, missing parents, negative payment amounts, and duplicate point awards were rejected.
-- The disposable container was removed. No production database was touched and no remote was pushed.
+- The callback MySQL integration test passed in a separate disposable, network-isolated MySQL 8.4 container: retry deduplication, changed-payload conflict, and rollback after an injected outbox failure.
+- Disposable containers were removed. No production database was touched and no remote was pushed.
 
 ## Current boundary and next work
 
-This is a target implementation, not a verified production data migration. Do not switch production traffic. Obtain read-only schema metadata and table statistics, deployed process and queue configuration, and redacted provider callback samples. Then complete source-to-target column mapping, business contract tests, idempotent product workers, observability deployment, data reconciliation, backup/restore rehearsal, and cutover plan before production use.
+This is a target implementation, not a verified production data migration. Do not switch production traffic. Obtain read-only schema metadata and table statistics, deployed process and queue configuration, and redacted provider callback samples. Then validate the preliminary source-to-target map against live metadata, complete column-level mapping, business contract tests, idempotent product workers, observability deployment, data reconciliation, backup/restore rehearsal, and cutover plan before production use.
 
-Keep the PHP repository intact as the behavioral reference. Do not commit credentials, dumps, or customer data. The new project's Git history currently contains commits `8e1b909` and `a1f1e71`, followed by this state note.
+Keep the PHP repository intact as the behavioral reference. Do not commit credentials, dumps, or customer data. The new project is an independent local Git repository on `main`, with no configured remote.
