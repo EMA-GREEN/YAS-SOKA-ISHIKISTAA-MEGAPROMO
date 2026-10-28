@@ -1,7 +1,7 @@
 <?php
 
 define('PUBLISHER_USER','trivia_publisher');
-define('PASSWORD','bJ++r5tL>xQdG:7H');
+define('PASSWORD','change_me');
 define('TRIVIA_DB','ishikistaa_tigo_vas');
 define('DB_HOST','localhost');
 define('DB_CONSUMER_USER','trivia_consumer');
