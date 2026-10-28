@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -129,5 +130,84 @@ func TestDispatchIntegration(t *testing.T) {
 	}
 	if err := store.DB.QueryRowContext(ctx, `SELECT delivery_state FROM outbound_messages WHERE id=?`, second).Scan(&state); err != nil || state != "NEEDS_REVIEW" || calls.Load() != 2 {
 		t.Fatalf("uncertain state=%q calls=%d err=%v", state, calls.Load(), err)
+	}
+
+	// An explicit provider refusal is resent once, after a delay, with a new request ID.
+	var mu sync.Mutex
+	var requestIDs []string
+	answers := []string{`{"responseParam":{"status":"1","statusCode":"1001"}}`}
+	scripted := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			RequestID string `json:"requestId"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mu.Lock()
+		defer mu.Unlock()
+		requestIDs = append(requestIDs, body.RequestID)
+		reply := answers[0]
+		if len(answers) > 1 {
+			answers = answers[1:]
+		}
+		_, _ = w.Write([]byte(reply))
+	}))
+	defer scripted.Close()
+	d.Config.Endpoint = scripted.URL
+	mustState := func(id int64, want string) {
+		t.Helper()
+		var got string
+		if err := store.DB.QueryRowContext(ctx, `SELECT delivery_state FROM outbound_messages WHERE id=?`, id).Scan(&got); err != nil || got != want {
+			t.Fatalf("message %d state=%q err=%v, want %s", id, got, err, want)
+		}
+	}
+	dueNow := func(id int64) {
+		t.Helper()
+		if _, err := store.DB.ExecContext(ctx, `UPDATE outbound_messages SET next_attempt_at=DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 1 SECOND) WHERE id=?`, id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	answers = []string{`{"responseParam":{"status":"1","statusCode":"1001"}}`, `{"responseParam":{"status":"0"}}`}
+	third := seed("Synthetic refused then accepted")
+	if worked, err := d.DispatchOne(ctx); err != nil || !worked {
+		t.Fatalf("refused worked=%v err=%v", worked, err)
+	}
+	mustState(third, "PENDING")
+	if worked, err := d.DispatchOne(ctx); err != nil || worked {
+		t.Fatal("a resend must wait for its delay")
+	}
+	dueNow(third)
+	if worked, err := d.DispatchOne(ctx); err != nil || !worked {
+		t.Fatalf("resend worked=%v err=%v", worked, err)
+	}
+	mustState(third, "ACCEPTED")
+	if len(requestIDs) != 2 || !strings.HasPrefix(requestIDs[0], "I") || !strings.HasPrefix(requestIDs[1], "IR") || requestIDs[0] == requestIDs[1] {
+		t.Fatalf("request IDs %v", requestIDs)
+	}
+	// Refused twice: the message is closed as REJECTED, not sent a third time.
+	answers = []string{`{"responseParam":{"status":"1","statusCode":"1001"}}`}
+	fourth := seed("Synthetic refused twice")
+	if _, err := d.DispatchOne(ctx); err != nil {
+		t.Fatal(err)
+	}
+	dueNow(fourth)
+	if _, err := d.DispatchOne(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustState(fourth, "REJECTED")
+	dueNow(fourth)
+	if worked, _ := d.DispatchOne(ctx); worked {
+		t.Fatal("a rejected message must not be sent again")
+	}
+	// PHP only resends on the day the SMS was created.
+	fifth := seed("Synthetic stale refusal")
+	if _, err := store.DB.ExecContext(ctx, `UPDATE outbound_messages SET created_at=DATE_SUB(UTC_TIMESTAMP(6), INTERVAL 2 DAY) WHERE id=?`, fifth); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.DispatchOne(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustState(fifth, "REJECTED")
+	var resendEvents int64
+	if err := store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM outbound_message_events WHERE event_kind='REJECTED_RETRY'`).Scan(&resendEvents); err != nil || resendEvents != 2 {
+		t.Fatalf("resend events=%d err=%v", resendEvents, err)
 	}
 }
